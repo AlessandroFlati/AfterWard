@@ -186,6 +186,7 @@ class WorkspaceStore:
             acknowledgements=record['acknowledgements'], identity_mode='private_local' if self.personal else 'synthetic_demonstration',
             ai={'documentary': 'available' if self.ai else 'disabled',
                 'explanation': 'ward_review_required' if self.ai else 'disabled',
+                'question_check': 'available' if self.ai else 'disabled',
                 'ward_assistance': 'available' if self.ai else 'disabled'})
         fingerprints = self._fingerprints(flow, role)
         value['ai_jobs'] = []
@@ -246,7 +247,8 @@ class WorkspaceStore:
         if self.personal or not self.ai or role not in ('patient', 'staff'):
             raise FlowError('AI is unavailable in this workspace. Personal documents are never sent to AMD.')
         kind = payload.get('kind')
-        if kind not in ('analyze', 'explain', 'draft') or kind == 'draft' and role != 'staff':
+        if (kind not in ('analyze', 'explain', 'draft', 'answer')
+                or kind == 'draft' and role != 'staff' or kind == 'answer' and role != 'patient'):
             raise FlowError('Choose an available AI action.')
         identifier = uuid.uuid4().hex
         with self.ai_admission:
@@ -269,6 +271,12 @@ class WorkspaceStore:
                 documents = self._ai_documents(record, role, clean['documents'])
                 question = None
                 source = None
+                if kind == 'answer':
+                    questions = payload.get('questions')
+                    if type(questions) is not list or not 1 <= len(questions) <= 10:
+                        raise FlowError('Choose between one and ten questions to check.')
+                    clean['questions'] = [{'id': f'q{i+1}', 'text': bounded_text(text, 2000)}
+                                          for i, text in enumerate(questions)]
                 if kind == 'draft':
                     question = flow.questions.get(payload.get('question_id'))
                     if not question or question['status'] not in ('open', 'needs_review'):
@@ -334,6 +342,8 @@ class WorkspaceStore:
                     result = self.ai.analyze(documents, lambda text: save(stage=text))
                 elif job['kind'] == 'explain':
                     result = self.ai.explain(source, job['payload']['quote'], lambda text: save(stage=text))
+                elif job['kind'] == 'answer':
+                    result = self.ai.answer(documents, job['payload']['questions'], lambda text: save(stage=text))
                 else:
                     result = self.ai.draft(documents, question, lambda text: save(stage=text))
                 save(result=result)
@@ -532,8 +542,44 @@ class WorkspaceStore:
                 job.setdefault('asked_keys', []).extend(keys)
             elif action == 'approve_explanation':
                 flow.approve_explanation(actor, payload.get('explanation_id'), revision)
+            elif action == 'ask_checked':
+                if role != 'patient':
+                    raise FlowError('Patient action required.')
+                job = next((j for j in record.get('ai_jobs', []) if j['id'] == payload.get('job_id')
+                    and j['role'] == role and j['kind'] == 'answer' and j['status'] == 'completed'), None)
+                if not job or job['fingerprints'] != self._fingerprints(flow, role):
+                    raise FlowError('Check the questions again against the current documents.')
+                keys = payload.get('keys')
+                rows = {r['question_id']: r for r in job['result']['answers']}
+                if (type(keys) is not list or not 1 <= len(keys) <= 10 or any(type(k) is not str for k in keys)
+                        or len(set(keys)) != len(keys) or any(k not in rows for k in keys)):
+                    raise FlowError('Select the questions you want to send.')
+                if any(k in job.get('asked_keys', []) for k in keys):
+                    raise FlowError('One of these questions already has a conversation. Open My questions.')
+                for key in keys:
+                    flow.ask(actor, rows[key]['question'], flow.revision)
+                job.setdefault('asked_keys', []).extend(keys)
             elif action == 'draft':
                 flow.draft_reply(actor, payload.get('text'), payload.get('covered'), revision, reply_id=payload.get('reply_id'))
+            elif action == 'reply_and_send':
+                flow.authorize(actor, 'reply')
+                rows = payload.get('replies')
+                if (payload.get('recipient_confirmed') is not True or type(rows) is not list
+                        or not 1 <= len(rows) <= 30 or any(type(row) is not dict for row in rows)):
+                    raise FlowError('Choose the replies to send to this patient.')
+                covered, reply_ids = set(), []
+                for row in rows:
+                    qid = row.get('question_id')
+                    question = flow.questions.get(qid) if type(qid) is str else None
+                    if not question or question['status'] not in ('open', 'needs_review') or qid in covered:
+                        raise FlowError('Choose each question waiting for a reply once.')
+                    previous = flow.replies.get(row.get('reply_id')) if type(row.get('reply_id')) is str else None
+                    if row.get('reply_id') is not None and (not previous or previous['covered'] != [qid]):
+                        raise FlowError('This draft belongs to a different conversation.')
+                    covered.add(qid)
+                    reply_ids.append(flow.draft_reply(actor, row.get('text'), [qid], flow.revision,
+                                                     reply_id=row.get('reply_id')))
+                flow.deliver_replies(actor, reply_ids, flow.revision)
             elif action == 'follow_up':
                 flow.follow_up(actor, payload.get('question_id'), payload.get('reply_id'), payload.get('text'), revision)
             elif action == 'send_batch':

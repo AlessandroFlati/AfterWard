@@ -82,6 +82,52 @@ class ProductTests(unittest.TestCase):
         with self.assertRaises(FlowError):
             reopened.view(second, 'patient')
 
+    def test_question_boundaries_preserve_paragraphs(self):
+        questions = ['Where is the sheet?\n\nI have checked my documents.\nPlease explain where to find it.',
+                     'When is the appointment?\nI may already have the paper reminder.']
+        patient = self.act('patient', 'ask', questions=questions)
+        self.assertEqual(len(patient['questions']), 2)
+        for view in (patient, self.store.view(self.token, 'staff')):
+            self.assertEqual([q['text'] for q in view['questions']], questions)
+            self.assertEqual([q['messages'][0]['text'] for q in view['questions']], questions)
+
+    def test_direct_reply_saves_and_delivers_in_one_action(self):
+        state = self.act('patient', 'ask', questions=['Where is the sheet?'])
+        qid = state['questions'][0]['id']
+        self.act('staff', 'reply_and_send', replies=[{'question_id': qid, 'text': 'I will share it here.'}],
+                 recipient_confirmed=True)
+        patient = self.store.view(self.token, 'patient')
+        self.assertEqual(patient['questions'][0]['status'], 'answered')
+        self.assertEqual(patient['replies'][0]['text'], 'I will share it here.')
+
+    def test_direct_batch_rejects_all_when_one_reply_is_invalid(self):
+        state = self.act('patient', 'ask', questions=['First?', 'Second?'])
+        first, second = [q['id'] for q in state['questions']]
+        with self.assertRaises(FlowError):
+            self.act('staff', 'reply_and_send', replies=[{'question_id': first, 'text': 'First answer'},
+                {'question_id': second, 'text': ''}], recipient_confirmed=True)
+        state = self.store.view(self.token, 'staff')
+        self.assertEqual(state['replies'], [])
+        self.assertTrue(all(q['status'] == 'open' for q in state['questions']))
+        with self.assertRaises(FlowError):
+            self.act('patient', 'reply_and_send', replies=[{'question_id': first, 'text': 'Impersonation'}],
+                     recipient_confirmed=True)
+
+    def test_direct_reply_cannot_repurpose_another_question_draft(self):
+        state = self.act('patient', 'ask', questions=['First?', 'Second?'])
+        first, second = [q['id'] for q in state['questions']]
+        state = self.act('staff', 'draft', text='Saved answer', covered=[first])
+        draft_id = state['replies'][0]['id']
+        with self.assertRaises(FlowError):
+            self.act('staff', 'reply_and_send', replies=[{'question_id': second, 'text': 'Changed answer',
+                'reply_id': draft_id}], recipient_confirmed=True)
+        self.act('staff', 'reply_and_send', replies=[{'question_id': first, 'text': 'Final answer',
+            'reply_id': draft_id}], recipient_confirmed=True)
+        state = self.store.view(self.token, 'patient')
+        self.assertEqual(len(state['replies']), 1)
+        self.assertEqual(state['replies'][0]['text'], 'Final answer')
+        self.assertEqual(state['questions'][1]['status'], 'open')
+
     def test_csrf_revision_and_personal_boundaries(self):
         state = self.store.view(self.token, 'staff')
         with self.assertRaises(FlowError):

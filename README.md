@@ -2,7 +2,7 @@
 
 One discharge. A conversation that continues.
 
-AfterWard keeps discharge documents, patient questions, ward replies and follow-ups in one case. The ward can prepare and deliver documents before the patient leaves; a patient can also start with a PDF. Google Gemma transcribes scanned pages, checks documentary clarification needs, drafts optional ward replies and prepares plain-language explanations through the AMD API. Original sources remain available for review.
+AfterWard helps patients understand discharge documents and helps wards identify information to clarify before and after discharge. Google Gemma, through the AMD API, reads scans, checks missing or conflicting instructions, locates answers before a patient sends a question, and prepares plain-language explanations and optional ward replies. Questions that still need people continue in a shared conversation. Original sources remain available for review.
 
 Built for the [AMD Developer Hackathon Act III](https://lablab.ai/ai-hackathons/amd-developer-hackathon-act-iii). This repository contains the runnable product, example PDFs and a small offline regression suite. Private documents, credentials, development notebooks, interview answers, bulk evaluation corpora and experiment logs are excluded.
 
@@ -29,6 +29,7 @@ The `/presentation` page contains the video walkthrough and a six-page outline f
 | Explicit document delivery and patient-controlled resolution | Implemented |
 | Shared case across browsers/devices | Implemented with demo identities |
 | Automatic gap detection, plain-language explanations, ward AI drafting | Connected: medium document checks and ward drafting; none explanations with staff review before publication |
+| Patient question check before contacting the ward | Connected: medium reasoning over patient-visible documents, exact source excerpts, explicit selection before sending; the patient can bypass the check |
 | FHIR input | Bounded library/CLI foundation; no live hospital connector |
 | Verified hospital identity, real delegation, external notifications | Not implemented |
 | Clinical outcomes, production security certification, measured staff savings | Not established |

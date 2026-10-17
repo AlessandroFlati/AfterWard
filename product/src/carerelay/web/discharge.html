@@ -2,5 +2,6 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>AfterWard</title><link rel="stylesheet" href="discharge.css"><script src="discharge.js" defer></script></head>
 <body><a class="skip" href="#main">Skip to content</a><div id="app"><main id="main"><h1>AfterWard</h1><p>Loading case...</p></main></div>
-<div id="notice" role="status" aria-live="polite"></div><dialog id="confirm"><form method="dialog"><h2 id="confirm-title">Confirm</h2><div id="confirm-body"></div><div class="actions"><button value="cancel">Cancel</button><button class="primary" value="confirm" id="confirm-submit">Confirm</button></div></form></dialog>
+<aside id="notification-dock" aria-label="Notifications"><div id="notice" hidden><span id="notice-message" role="status" aria-live="polite"></span><button id="dismiss-notice" type="button" aria-label="Dismiss notification">&times;</button></div><a id="activity-shortcut" class="button" href="#activity" hidden>Action required <span class="activity-count">0</span></a></aside>
+<dialog id="confirm" aria-labelledby="confirm-title"><form method="dialog"><div class="dialog-heading"><h2 id="confirm-title" tabindex="-1">Confirm</h2><button value="cancel" aria-label="Close dialog">&times;</button></div><div id="confirm-body"></div><div class="actions"><button value="cancel">Cancel</button><button class="primary" value="confirm" id="confirm-submit">Confirm</button></div></form></dialog>
 </body></html>

@@ -67,6 +67,33 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(result['findings'][0]['key'], 'medicine:conflict')
         self.assertEqual(len(client.calls), 3)
 
+    def test_patient_answer_check_returns_source_excerpts_and_medium(self):
+        client = ScriptedClient([{'answers': [{'question_id': 'q1', 'status': 'found',
+            'citations': [{'source_id': 'p1l1'}]}, {'question_id': 'q2', 'status': 'not_found', 'citations': []}]}])
+        result = DischargeAI(client).answer(self.docs, [{'id': 'q1', 'text': 'Where are the exercises?'},
+                                                      {'id': 'q2', 'text': 'When is my appointment?'}], lambda _: None)
+        self.assertEqual(client.calls[0][1], 'medium')
+        self.assertEqual(result['answers'][0]['citations'][0]['quote'], self.docs[0]['pages'][0])
+        self.assertNotIn('text', result['answers'][0])
+
+    def test_patient_answer_check_rejects_missing_evidence_and_wrong_questions(self):
+        cases = [
+            {'question_id': 'q1', 'status': 'found', 'citations': []},
+            {'question_id': 'q2', 'status': 'not_found', 'citations': []},
+            {'question_id': 'q1', 'status': 'conflicting', 'citations': [{'source_id': 'p1l1'}]},
+            {'question_id': 'q1', 'status': 'not_found', 'citations': [{'source_id': 'p1l1'}]},
+        ]
+        for row in cases:
+            with self.subTest(row=row), self.assertRaises(FlowError):
+                DischargeAI(ScriptedClient([{'answers': [row]}])).answer(self.docs,
+                    [{'id': 'q1', 'text': 'Question'}], lambda _: None)
+
+    def test_patient_answer_check_rejects_nonexistent_quote(self):
+        client = ScriptedClient([{'answers': [{'question_id': 'q1', 'status': 'found',
+                                             'citations': [{'source_id': 'p1l999'}]}]}])
+        with self.assertRaises((FlowError, ValueError)):
+            DischargeAI(client).answer(self.docs, [{'id': 'q1', 'text': 'Question'}], lambda _: None)
+
 
 class BlockingAI:
     def __init__(self):
@@ -191,6 +218,45 @@ class WorkspaceAITests(unittest.TestCase):
         self.assertEqual(state['questions'][0]['source_finding']['citations'][0]['document_id'], 'letter')
         with self.assertRaisesRegex(FlowError, 'already has'):
             self.store.mutate(self.token, 'patient', state['csrf'], 'ask_findings', {**payload,'revision':state['revision']})
+
+    def start_answer_check(self):
+        self.store.ai = DischargeAI(ScriptedClient([{'answers': [
+            {'question_id': 'q1', 'status': 'found', 'citations': [{'source_id': 'p1l1'}]},
+            {'question_id': 'q2', 'status': 'not_found', 'citations': []}]}]))
+        self.start(kind='answer', questions=['What is follow-up?', 'What time is my appointment?'])
+        job = self.finish()
+        self.assertEqual(job['status'], 'completed')
+        return job
+
+    def test_answer_check_is_private_until_patient_sends_a_selection(self):
+        job = self.start_answer_check()
+        staff = self.store.view(self.token, 'staff')
+        self.assertEqual(staff['questions'], [])
+        self.assertEqual(staff['ai_jobs'], [])
+        state = self.store.view(self.token, 'patient')
+        state = self.store.mutate(self.token, 'patient', state['csrf'], 'ask_checked',
+            {'revision': state['revision'], 'job_id': job['id'], 'keys': ['q2']})
+        self.assertEqual([q['text'] for q in state['questions']], ['What time is my appointment?'])
+        with self.assertRaisesRegex(FlowError, 'already has'):
+            self.store.mutate(self.token, 'patient', state['csrf'], 'ask_checked',
+                {'revision': state['revision'], 'job_id': job['id'], 'keys': ['q2']})
+        state = self.store.mutate(self.token, 'patient', state['csrf'], 'ask_checked',
+            {'revision': state['revision'], 'job_id': job['id'], 'keys': ['q1']})
+        self.assertEqual(len(state['questions']), 2)
+
+    def test_answer_check_limits_sources_and_rejects_changed_documents(self):
+        with self.assertRaisesRegex(FlowError, 'available'):
+            self.start(kind='answer', documents=['rehab'], questions=['What exercises?'])
+        with self.assertRaisesRegex(FlowError, 'available AI action'):
+            self.start(role='staff', kind='answer', questions=['Question'])
+        job = self.start_answer_check()
+        state = self.store.view(self.token, 'patient')
+        state = self.store.mutate(self.token, 'patient', state['csrf'], 'supplement',
+            {'revision': state['revision'], 'fixture': 'rehab'})
+        self.assertTrue(state['ai_jobs'][-1]['stale'])
+        with self.assertRaisesRegex(FlowError, 'current documents'):
+            self.store.mutate(self.token, 'patient', state['csrf'], 'ask_checked',
+                {'revision': state['revision'], 'job_id': job['id'], 'keys': ['q2']})
 
 
 if __name__ == '__main__':
