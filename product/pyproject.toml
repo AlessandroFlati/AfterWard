@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "afterward"
+version = "0.2.0"
+description = "AfterWard: discharge conversations and source-reviewed PDF intake on AMD"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{name = "Alessandro Flati"}]
+dependencies = [
+    "pydantic>=2,<3",
+    "pypdfium2==5.14.0",
+    "Pillow==12.3.0",
+]
+
+[project.optional-dependencies]
+fixtures = ["reportlab==5.0.1", "pypdf==6.20.1"]
+local-ocr = ["rapidocr==3.10.0", "onnxruntime==1.31.0"]
+
+[project.scripts]
+carerelay = "carerelay.__main__:main"
+afterward = "carerelay.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+carerelay = ["web/discharge.html", "web/discharge.css", "web/discharge.js", "web/judge-guide.html", "web/presentation.html", "web/*.woff2", "web/*.license.txt", "assets/demo/*.pdf"]

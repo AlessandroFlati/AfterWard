@@ -1,0 +1,8 @@
+# Runtime pins for the API OCR deployment. Local OCR is an optional extra.
+annotated-types==0.8.0
+pydantic==2.14.1
+pydantic_core==2.50.1
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+pypdfium2==5.14.0
+Pillow==12.3.0

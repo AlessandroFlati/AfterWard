@@ -1,0 +1,81 @@
+{
+  "project": "AfterWard (definitive project name; Python package remains carerelay)",
+  "upstream": "https://github.com/AlessandroFlati/TrustedRisk",
+  "upstream_commit": "d79bcf5a8c289a4a2f51989608b9db8d33a21efc",
+  "license": "MIT",
+  "copyright_holder": "Alessandro Flati",
+  "imported_at_utc": "2026-10-13T08:17:43.619545+00:00",
+  "files": [
+    {
+      "source_path": "src/shared/schemas.py",
+      "source_sha256": "66113ac87f8cf049ed6b6d67a9491ca4bde6b750d2fa6d6eacf2414f5379f756",
+      "destination": "src/carerelay/foundation/schemas.py",
+      "destination_sha256": "0697d71655a18c4ec1cc817b8b5b2f87a340a314d2de9a3a05f419c957144cce",
+      "symbols": [
+        "ClinicalNoteSection",
+        "MerkleProofStep",
+        "MerkleAuditChainResult",
+        "MerkleInclusionProof",
+        "MerkleAuditVerificationReport"
+      ],
+      "adaptations": [
+        "Selected five models; changed module namespace."
+      ]
+    },
+    {
+      "source_path": "src/mcp_server/tools/_scribe_helpers.py",
+      "source_sha256": "226249ddabaf637bb1fe82f5c271cf797960c2399933fa73e9094fff631734e4",
+      "destination": "src/carerelay/foundation/fhir.py",
+      "destination_sha256": "9fd07d339ecbb258219bda4d8bf967d86911d70a170ed918b15d86c0ff0a4d80",
+      "symbols": [
+        "_entries",
+        "extract_medications",
+        "extract_allergies",
+        "render_bullets_section",
+        "_SOAP_SECTION_HEADERS",
+        "_decode_attachment_body",
+        "_iter_clinical_note_bodies",
+        "extract_soap_section"
+      ],
+      "adaptations": [
+        "Selected deterministic extraction and section-rendering symbols; removed unrelated model-provider dependencies."
+      ]
+    },
+    {
+      "source_path": "src/a2a_agent/merkle_audit.py",
+      "source_sha256": "3880e1986ce96abd12af644ba2d043aa4a4f48dc4fcae34d2aea7ade6ffcae9d",
+      "destination": "src/carerelay/foundation/merkle_audit.py",
+      "destination_sha256": "38045f569aaf69b5952adad2cda1feaa09edd53f4791aff082013d247a31d017",
+      "symbols": [
+        "whole module"
+      ],
+      "adaptations": [
+        "Changed schema import and module explanation; corrected RFC 6962 equivalence claim. Algorithms retained."
+      ]
+    }
+  ],
+  "excluded": [
+    "Risk coefficients and clinical decision engines",
+    "Specialist federation and deployment services",
+    "Clinical outcome, regulatory approval and simulated savings claims",
+    "Live patient data and credentials"
+  ],
+  "new_work": [
+    "Explicit patient, encounter and source-document scope",
+    "Bounded FHIR, printed PDF and CPU OCR adapters with retained source pages",
+    "Validated source-linked finding contract and an explicit local-pattern comparator",
+    "Server-side Gemma image transcription through AMD, with strict output validation and persisted quota accounting",
+    "SQLite session isolation, revision-bound review, ownership and unresolved follow-up",
+    "English patient and ward interface, original PDF assets, source review and conversation export",
+    "Linked follow-ups, selective reminders, selected batch replies and patient-controlled resolution",
+    "One-use shared workspace invites and explicit document delivery",
+    "Portable product regression tests, public-demo upload restrictions, judge guide and Railway packaging"
+  ],
+  "remaining": [
+    "Integration and release verification of qualified documentary analysis, explanation and ward-assistance models in the current interface",
+    "Independent clinical and real-workflow validation beyond fictional reviews",
+    "Recording and final submission",
+    "Organizer confirmation of pre-existing-work eligibility"
+  ],
+  "scope_note": "This records code provenance and current prototype boundaries, not clinical validation or competition eligibility. Imported destination hashes describe the original import."
+}
