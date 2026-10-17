@@ -12,6 +12,8 @@ import json
 from pathlib import Path
 import secrets
 import sqlite3
+import threading
+import uuid
 
 from .discharge_flow import Actor, Document, DischargeFlow, FlowError, bounded_text
 
@@ -21,7 +23,10 @@ LETTER = ('Continue outpatient follow-up.\n'
           'Follow-up means later appointments at the outpatient clinic.\n\n'
           'Follow the rehabilitation programme on the sheet provided.\n'
           'Refer to the reminder for your follow-up appointment.\n')
-REHAB = 'Exercises start after the rehabilitation medicine appointment on 2 December. The specialist will confirm when to begin.'
+REHAB = ('Exercises start after the rehabilitation medicine appointment on 2 December. The specialist will confirm when to begin.\n\n'
+         'Programme for this demonstration case: while seated, move each foot up and down 5 times. '
+         'Repeat this session once daily for 7 days after the specialist confirms the start.\n'
+         'This sheet contains the complete written sequence for the example programme.')
 APPOINTMENT = 'Follow-up appointment on 15 December at 09:30, Medicine outpatient clinic.'
 
 
@@ -67,14 +72,18 @@ def decode(value):
 
 
 class WorkspaceStore:
-    def __init__(self, path, *, personal=False, page_transcriber=None, allowed_pdf_digests=None, local_ocr=True):
-        if personal and page_transcriber:
+    def __init__(self, path, *, personal=False, page_transcriber=None, allowed_pdf_digests=None, local_ocr=True, ai=None):
+        if personal and (page_transcriber or ai):
             raise ValueError('The shared AMD API cannot process personal documents.')
         self.path = Path(path)
         self.personal = personal
         self.page_transcriber = page_transcriber
         self.allowed_pdf_digests = allowed_pdf_digests
         self.local_ocr = local_ocr
+        self.ai = ai
+        self.ai_slot = threading.BoundedSemaphore(1)
+        self.ai_admission = threading.Lock()
+        self.ai_workers = set()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with closing(sqlite3.connect(self.path)) as db, db:
             db.execute('CREATE TABLE IF NOT EXISTS workspaces (token_hash TEXT PRIMARY KEY, csrf TEXT NOT NULL, expires TEXT NOT NULL, record TEXT NOT NULL)')
@@ -82,6 +91,14 @@ class WorkspaceStore:
             db.execute('CREATE TABLE IF NOT EXISTS workspace_sessions (token_hash TEXT PRIMARY KEY, workspace TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS workspace_invites (code_hash TEXT PRIMARY KEY, workspace TEXT NOT NULL, expires TEXT NOT NULL, role TEXT NOT NULL)')
             self._purge_expired(db)
+            for key, raw in db.execute('SELECT token_hash,record FROM workspaces').fetchall():
+                record = json.loads(raw)
+                interrupted = [j for j in record.get('ai_jobs', []) if j['status'] in ('queued', 'running')]
+                for job in interrupted:
+                    job.update(status='failed', message='The service restarted during the check. Start it again; no result was accepted.')
+                if interrupted:
+                    record['ai_revision'] = record.get('ai_revision', 0) + 1
+                    db.execute('UPDATE workspaces SET record=? WHERE token_hash=?', (json.dumps(record), key))
 
     def _purge_expired(self, db):
         db.execute('PRAGMA secure_delete=ON')
@@ -102,7 +119,7 @@ class WorkspaceStore:
             episode_id=secrets.token_hex(8) if self.personal else 'STAY-24-1187',
             entry_route='patient' if route == 'patient' else 'hospital')
         identity = actors(flow)
-        if not self.personal:
+        if not self.personal and route != 'patient':
             for key, text in (('letter', LETTER), ('rehab', REHAB), ('appointment', APPOINTMENT)):
                 flow.add_document(identity['staff'], Document(key, flow.tenant, flow.patient_id, flow.episode_id, '1', text, True), flow.revision)
         if route == 'hospital':
@@ -111,7 +128,8 @@ class WorkspaceStore:
             flow.set_delegate(identity['patient'], 'Sofia Rinaldi', True, flow.revision,
                 expires_at=datetime.now(timezone.utc) + timedelta(days=7))
         record = {'schema': 1, 'flow': encode(flow), 'messages': [], 'acknowledgements': [],
-            'bundle_confirmation': None, 'intake': [], 'owner': None if self.personal else 'Marta Ricci', 'tasks': []}
+            'bundle_confirmation': None, 'intake': [], 'owner': None if self.personal else 'Marta Ricci', 'tasks': [],
+            'person': 'PDF case' if route == 'patient' else 'Giorgio Rinaldi'}
         with closing(sqlite3.connect(self.path, timeout=10)) as db, db:
             db.execute('BEGIN IMMEDIATE')
             self._purge_expired(db)
@@ -163,10 +181,28 @@ class WorkspaceStore:
             doc['origin'] = 'personal' if doc['identifier'] in flow.personal_documents else 'ward'
             delivered = flow.delivered.get(doc['identifier'])
             doc['delivered'] = bool(delivered and delivered.fingerprint == flow.documents[doc['identifier']].fingerprint)
-        value.update(csrf=csrf, role=role, workspace_code=record.get('workspace_code'), person='Your documents' if self.personal else 'Giorgio Rinaldi', owner=record['owner'],
+        value.update(csrf=csrf, role=role, workspace_code=record.get('workspace_code'), person='Your documents' if self.personal else record.get('person', 'Giorgio Rinaldi'), owner=record['owner'],
             recipient='The ward you will contact' if self.personal else 'Continuity of care desk · Medicine', messages=record['messages'],
             acknowledgements=record['acknowledgements'], identity_mode='private_local' if self.personal else 'synthetic_demonstration',
-            ai={'documentary': 'qualification_in_progress', 'explanation': 'qualification_in_progress', 'ward_assistance': 'adapter_pending'})
+            ai={'documentary': 'available' if self.ai else 'disabled',
+                'explanation': 'ward_review_required' if self.ai else 'disabled',
+                'ward_assistance': 'available' if self.ai else 'disabled'})
+        fingerprints = self._fingerprints(flow, role)
+        value['ai_jobs'] = []
+        for job in record.get('ai_jobs', []):
+            if job['role'] != role:
+                continue
+            item = {k: job[k] for k in ('id', 'kind', 'status', 'stage', 'created_at_utc', 'message', 'result', 'payload', 'asked_keys') if k in job}
+            item['stale'] = job['fingerprints'] != fingerprints
+            if job['kind'] == 'draft':
+                q = flow.questions.get(job['payload']['question_id'])
+                item['stale'] |= not q or q['generation'] != job['question_generation'] or q['status'] not in ('open', 'needs_review')
+                item['stale'] |= job.get('delivery') != {k: d.fingerprint for k, d in flow.delivered.items()}
+            if role != 'staff' and job['kind'] == 'explain' and item.get('result'):
+                item['result'] = {k: v for k, v in item['result'].items() if k != 'explanation'}
+            value['ai_jobs'].append(item)
+        value['ai_pending'] = any(j['status'] in ('queued', 'running') for j in record.get('ai_jobs', []))
+        value['ai_revision'] = record.get('ai_revision', 0)
         value['uploads'] = [{k: item[k] for k in ('id','title','pages','confirmed')}
             for item in record.get('uploads', []) if role == 'staff' or item['uploader_role'] != 'staff'
             or 'pdf-' + item['id'] in flow.delivered]
@@ -180,6 +216,137 @@ class WorkspaceStore:
         if role == 'staff':
             value.update(tasks=record['tasks'], intake=record['intake'], bundle_confirmation=record['bundle_confirmation'])
         return value
+
+    @staticmethod
+    def _fingerprints(flow, role):
+        documents = dict(flow.documents) if role == 'staff' else dict(flow.delivered)
+        if role != 'staff':
+            documents.update({k: d for k, d in flow.documents.items() if k in flow.personal_documents})
+        return {k: d.fingerprint for k, d in documents.items()}
+
+    def _ai_documents(self, record, role, ids):
+        view = self._view(record, role, '')
+        available = {d['identifier']: d for d in view['documents']}
+        if type(ids) is not list or not ids or any(type(k) is not str for k in ids) or len(set(ids)) != len(ids) or any(k not in available for k in ids):
+            raise FlowError('Select documents available in this view.')
+        rows = []
+        for key in ids:
+            doc = available[key]
+            upload = next((u for u in record.get('uploads', []) if u['id'] == doc['upload_id']), None)
+            document = Document(**{k: doc[k] for k in Document.__dataclass_fields__})
+            rows.append({'identifier': key, 'title': doc['title'], 'fingerprint': document.fingerprint,
+                'delivered': doc['delivered'], 'pages': [p['text'] for p in upload['pages']] if upload else [doc['text']]})
+        if sum(len(d['pages']) for d in rows) > 5:
+            raise FlowError('Select documents totalling at most five pages for one check.')
+        if sum(len(p) for d in rows for p in d['pages']) > 60000:
+            raise FlowError('Selected documents exceed the 60,000-character check limit.')
+        return rows
+
+    def start_ai(self, token, role, csrf, payload):
+        if self.personal or not self.ai or role not in ('patient', 'staff'):
+            raise FlowError('AI is unavailable in this workspace. Personal documents are never sent to AMD.')
+        kind = payload.get('kind')
+        if kind not in ('analyze', 'explain', 'draft') or kind == 'draft' and role != 'staff':
+            raise FlowError('Choose an available AI action.')
+        identifier = uuid.uuid4().hex
+        with self.ai_admission:
+            if len(self.ai_workers) >= 8:
+                raise FlowError('The AI queue is full. Try again after an active check finishes.')
+            with closing(sqlite3.connect(self.path, timeout=10)) as db, db:
+                db.execute('BEGIN IMMEDIATE')
+                expected, record = self._load(db, token)
+                if not isinstance(csrf, str) or not secrets.compare_digest(csrf, expected):
+                    raise FlowError('Access denied.')
+                flow = decode(record['flow'])
+                actor = self._actor(flow, role)
+                flow.check(actor, 'read', payload.get('revision'))
+                jobs = record.setdefault('ai_jobs', [])
+                if any(j['status'] in ('queued', 'running') for j in jobs):
+                    raise FlowError('A check is already running for this case.')
+                if len(jobs) >= 20:
+                    raise FlowError('This session has reached twenty AI tasks. Open a new demo for further tests.')
+                clean = {'documents': payload.get('documents')}
+                documents = self._ai_documents(record, role, clean['documents'])
+                question = None
+                source = None
+                if kind == 'draft':
+                    question = flow.questions.get(payload.get('question_id'))
+                    if not question or question['status'] not in ('open', 'needs_review'):
+                        raise FlowError('Choose a question waiting for a reply.')
+                    clean['question_id'] = question['id']
+                if kind == 'explain':
+                    if len(documents) != 1:
+                        raise FlowError('Select one document for an explanation.')
+                    source = next(d for d in flow.view(actor)['documents'] if d['identifier'] == documents[0]['identifier'])
+                    clean['quote'] = bounded_text(payload.get('quote'), 5000)
+                    if source['text'].count(clean['quote']) != 1:
+                        raise FlowError('Select one exact, unique passage from the document.')
+                job = {'id': identifier, 'kind': kind, 'role': role, 'status': 'queued', 'stage': 'Waiting for the AMD worker',
+                    'created_at_utc': datetime.now(timezone.utc).isoformat(), 'payload': clean,
+                    'fingerprints': self._fingerprints(flow, role), 'question_generation': question['generation'] if question else None,
+                    'delivery': {k: d.fingerprint for k, d in flow.delivered.items()} if kind == 'draft' else None}
+                jobs.append(job)
+                flow.event(actor, 'ai_task_queued', task=identifier, kind=kind)
+                record['flow'] = encode(flow)
+                db.execute('UPDATE workspaces SET record=? WHERE token_hash=?', (json.dumps(record), self._workspace(db, token)))
+            self.ai_workers.add(identifier)
+            threading.Thread(target=self._run_ai, args=(token, identifier, documents, source, question), daemon=True).start()
+        return self.view(token, role)
+
+    def _run_ai(self, token, identifier, documents, source, question):
+        def save(stage=None, result=None, error=None):
+            with closing(sqlite3.connect(self.path, timeout=10)) as db, db:
+                db.execute('BEGIN IMMEDIATE')
+                _, record = self._load(db, token)
+                job = next(j for j in record['ai_jobs'] if j['id'] == identifier)
+                flow = decode(record['flow'])
+                actor = self._actor(flow, job['role'])
+                if job['fingerprints'] != self._fingerprints(flow, job['role']):
+                    error, result = 'Documents changed during this check. Run it again on the current bundle.', None
+                if job['kind'] == 'draft':
+                    current = flow.questions.get(job['payload']['question_id'])
+                    if not current or current['generation'] != job['question_generation'] or current['status'] not in ('open', 'needs_review'):
+                        error, result = 'The conversation changed. Request a draft for the latest question.', None
+                    if job['delivery'] != {k: d.fingerprint for k, d in flow.delivered.items()}:
+                        error, result = 'Document delivery changed. Request a new draft with the current patient access.', None
+                if error:
+                    job.update(status='failed', message=error, stage='Check stopped')
+                elif result is not None:
+                    if job['kind'] == 'explain':
+                        output = result['explanation']
+                        exp_id = flow.submit_explanation(actor, source['identifier'], job['payload']['quote'],
+                            {k: output[k] for k in ('document_fingerprint','source_quote','plain_language','needs_clarification')},
+                            {'model': result['calls'][0]['model'], 'run_id': identifier, 'mode': 'live'}, flow.revision)
+                        result['explanation_id'] = exp_id
+                    job.update(status='completed', result=result, stage='Ready to review')
+                else:
+                    job.update(status='running', stage=stage)
+                record['ai_revision'] = record.get('ai_revision', 0) + 1
+                record['flow'] = encode(flow)
+                db.execute('UPDATE workspaces SET record=? WHERE token_hash=?', (json.dumps(record), self._workspace(db, token)))
+            if error:
+                raise FlowError(error)
+            return job
+        try:
+            with self.ai_slot:
+                job = save(stage='Starting the check')
+                if job['kind'] == 'analyze':
+                    result = self.ai.analyze(documents, lambda text: save(stage=text))
+                elif job['kind'] == 'explain':
+                    result = self.ai.explain(source, job['payload']['quote'], lambda text: save(stage=text))
+                else:
+                    result = self.ai.draft(documents, question, lambda text: save(stage=text))
+                save(result=result)
+        except Exception as exc:
+            from .documents import DocumentError
+            message = str(exc) if isinstance(exc, (FlowError, DocumentError)) else 'This AI result could not be validated. No answer was published. Review the documents or retry.'
+            try:
+                save(error=message)
+            except (FlowError, StopIteration):
+                pass
+        finally:
+            with self.ai_admission:
+                self.ai_workers.discard(identifier)
 
     def view(self, token, role):
         with closing(sqlite3.connect(self.path, timeout=10)) as db:
@@ -348,6 +515,23 @@ class WorkspaceStore:
                     raise FlowError('Choose between one and ten questions.')
                 for text in questions:
                     flow.ask(actor, text, flow.revision)
+            elif action == 'ask_findings':
+                job = next((j for j in record.get('ai_jobs', []) if j['id'] == payload.get('job_id') and j['role'] == role and j['kind'] == 'analyze' and j['status'] == 'completed'), None)
+                if not job or job['fingerprints'] != self._fingerprints(flow, role):
+                    raise FlowError('Run the check again on the current documents.')
+                keys = payload.get('keys')
+                rows = {r['key']: r for r in job['result']['findings']}
+                if type(keys) is not list or not 1 <= len(keys) <= 10 or any(type(k) is not str for k in keys) or len(set(keys)) != len(keys) or any(k not in rows for k in keys):
+                    raise FlowError('Select one to ten clarification points.')
+                if any(k in job.get('asked_keys', []) for k in keys):
+                    raise FlowError('One of these points already has a conversation. Open My questions.')
+                for key in keys:
+                    row = rows[key]
+                    qid = flow.ask(actor, row['question'], flow.revision)
+                    flow.questions[qid]['source_finding'] = {'key': key, 'job_id': job['id'], 'citations': row['citations']}
+                job.setdefault('asked_keys', []).extend(keys)
+            elif action == 'approve_explanation':
+                flow.approve_explanation(actor, payload.get('explanation_id'), revision)
             elif action == 'draft':
                 flow.draft_reply(actor, payload.get('text'), payload.get('covered'), revision, reply_id=payload.get('reply_id'))
             elif action == 'follow_up':

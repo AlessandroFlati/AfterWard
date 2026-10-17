@@ -2,7 +2,7 @@
 
 One discharge. A conversation that continues.
 
-AfterWard keeps discharge documents, patient questions, ward replies and follow-ups in one case. The ward can prepare and deliver documents before the patient leaves; a patient can also start with a PDF. Google Gemma transcribes scanned pages through the AMD development API, with the original always available for human review.
+AfterWard keeps discharge documents, patient questions, ward replies and follow-ups in one case. The ward can prepare and deliver documents before the patient leaves; a patient can also start with a PDF. Google Gemma transcribes scanned pages, checks documentary clarification needs, drafts optional ward replies and prepares plain-language explanations through the AMD API. Original sources remain available for review.
 
 Built for the [AMD Developer Hackathon Act III](https://lablab.ai/ai-hackathons/amd-developer-hackathon-act-iii). This repository contains the runnable product, example PDFs and a small offline regression suite. Private documents, credentials, development notebooks, interview answers, bulk evaluation corpora and experiment logs are excluded.
 
@@ -28,12 +28,12 @@ The `/presentation` page contains the video walkthrough and a six-page outline f
 | Per-question reminders and selected batch replies | Implemented |
 | Explicit document delivery and patient-controlled resolution | Implemented |
 | Shared case across browsers/devices | Implemented with demo identities |
-| Automatic gap detection, plain-language explanations, ward AI drafting | Qualification work exists separately; not connected to this web interface |
+| Automatic gap detection, plain-language explanations, ward AI drafting | Connected: medium document checks and ward drafting; none explanations with staff review before publication |
 | FHIR input | Bounded library/CLI foundation; no live hospital connector |
 | Verified hospital identity, real delegation, external notifications | Not implemented |
 | Clinical outcomes, production security certification, measured staff savings | Not established |
 
-The interface never substitutes a recorded answer for a failed API call. Staff replies in the guided cases are written by the person using the staff view. OCR transcription does not establish clinical correctness.
+The interface never substitutes a recorded answer for a failed API call. Staff can write directly or review an AI suggestion; publication is always explicit. OCR transcription does not establish clinical correctness.
 
 ## Run locally
 
@@ -51,7 +51,7 @@ Open <http://127.0.0.1:8776/>. The default launch performs no model inference. S
 
 On Linux/macOS, activate the environment with `source .venv/bin/activate` and use the same Python commands. The internal Python namespace remains `carerelay` to retain compatibility with the imported foundation; the product and distribution are named AfterWard.
 
-### Enable real AMD OCR
+### Enable real AMD inference
 
 Use only invented, non-sensitive documents with the shared development endpoint. Its [terms](https://amd-aim.github.io/radeon-cloud-docs/api/terms/) exclude personal, health and other confidential data and describe request logging. This trial endpoint is not a production healthcare data-processing service.
 
@@ -60,13 +60,13 @@ Set these environment variables before starting the app. `.env.example` document
 | Variable | Value / meaning |
 | --- | --- |
 | `AMD_TOKEN_FACTORY_API_KEY` | Server-side AMD token; never commit or expose it in the browser |
-| `AFTERWARD_AMD_ENABLED` | `1` to enable OCR |
+| `AFTERWARD_AMD_ENABLED` | `1` to enable OCR and the three text tasks |
 | `AFTERWARD_AMD_FREE_QUOTA_CONFIRMED` | `1` after verifying the account's free entitlement |
 | `AFTERWARD_API_EXPIRES` | Explicit final UTC date, `YYYY-MM-DD` |
 | `AFTERWARD_API_TOTAL_LIMIT` | Total attempts for this deployment; default `200` |
 | `AFTERWARD_API_DAILY_LIMIT` | Attempts per UTC day; default `100` |
 
-The fixed endpoint is `https://developer.amd.com.cn/radeon/api/v1`; model `Gemma-4-31B-IT`. The browser sends PDF bytes to this server. The server renders pages locally, checks `/usage`, reserves an attempt in SQLite, then sends a PNG to AMD. OCR uses `reasoning_effort=none`, temperature `0`, a bounded JSON response and no automatic retry. This setting applies to transcription, not to the still-separate document-analysis experiments.
+The fixed endpoint is `https://developer.amd.com.cn/radeon/api/v1`; model `Gemma-4-31B-IT`. The browser sends PDF bytes to this server. The server renders pages locally, checks `/usage`, reserves an attempt in SQLite, then sends a PNG to AMD. OCR uses `reasoning_effort=none`, temperature `0`, a bounded JSON response and no automatic retry. Document checking uses medium reasoning: facts, findings with a contrary-fact audit, and a conditional conflict pass. At most one completed schema-invalid response is corrected. Ward drafts use medium; explanations use none and remain private until staff review. Text tasks run asynchronously, with source-revision invalidation and explicit failures. Each check accepts up to five selected pages and 60,000 characters.
 
 Each attempt, including failed inference, counts. Requests are serialized and spaced. The client preserves the final $0.05-equivalent daily quota allocation reported by AMD; the API's quota units are not evidence of a paid retail price. Changing environment limits does not reset or silently expand a persisted ledger. A leftover lease after an interrupted process blocks further inference until an operator verifies that no request is active and clears only that lease.
 
@@ -83,7 +83,8 @@ Browser (English, dark theme)
 - `product/src/carerelay/discharge_flow.py`: revision checks, role authorization, threads, reminders and patient resolution.
 - `discharge_service.py`: durable sessions, one-use invites, document visibility and intake assets.
 - `discharge_http.py`: bounded same-origin HTTP adapter, fixed static routes and `/health`.
-- `gemma_ocr.py`: fixed AMD provider, response validation and quota accounting.
+- `gemma_ocr.py`: fixed AMD provider, response validation and shared quota accounting.
+- `discharge_ai.py`, `document_checks.py`, `assets/prompts/`: production adaptation of the v7 two-pass checks, exact source resolution, conditional conflict comparison, explanations and optional reply drafting.
 - `app.py`: portable launcher and persistent deployment configuration.
 - `foundation/`, `handoff.py`, `evidence.py`, `documents.py`: scoped FHIR/evidence foundations and local extraction.
 - `web/`, `assets/demo/`: self-hosted interface, judge guide, presentation walkthrough and invented PDFs.
@@ -96,9 +97,9 @@ Hosted mode accepts only the exact packaged demonstration PDFs. There is no publ
 python -m unittest discover -s product/tests_release -v
 ```
 
-The portable offline suite checks shared sessions and deletion, linked follow-ups, selective reminders, delivery boundaries, CSRF/revision checks, scan handling, API output and quota failures, hosted routes and the public PDF allowlist. It requires no AMD key. It is not an accuracy benchmark or clinical validation.
+The portable offline suite checks shared sessions and deletion, linked follow-ups, selective reminders, delivery boundaries, CSRF/revision checks, scan handling, API output and quota failures, hosted routes and the public PDF allowlist. It also checks asynchronous jobs, scope isolation, changed-source rejection, bounded correction and human publication gates. It requires no AMD key. It is not an accuracy benchmark or clinical validation.
 
-For fixture regeneration, install the optional dependencies with `python -m pip install "./product[fixtures]"`, then run `python product/scripts/build_workspace_pdfs.py`.
+For fixture regeneration, install the optional dependencies with `python -m pip install "./product[fixtures]"`, then run `python product/scripts/build_workspace_pdfs.py`. This rebuilds the three simple documents and preserves the separately reconstructed three-page raster OCR example.
 
 ## Deployment and provenance
 

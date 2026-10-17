@@ -48,6 +48,7 @@ def handle_http(handler, store, base='', *, allowed_hosts):
         if route == '/api/config' and handler.command == 'GET':
             respond(200, {'personal': store.personal, 'pdf_max_pages': 5, 'pdf_max_bytes': 12 * 1024 * 1024,
                 'ocr_provider': 'amd_api' if store.page_transcriber else 'local' if store.local_ocr else 'disabled',
+                'ai_enabled': store.ai is not None,
                 'packaged_uploads_only': store.allowed_pdf_digests is not None,
                 'share_base': 'https://' + TAIL_HOST + TAIL_BASE if getattr(handler.server, 'tailscale', False) else None})
             return True
@@ -141,6 +142,8 @@ def handle_http(handler, store, base='', *, allowed_hosts):
         elif match and match[2] == 'read_page':
             respond(200, store.read_page(token, match[1], handler.headers.get('X-AfterWard-CSRF'),
                 body.get('revision'), body.get('upload_id'), body.get('page')))
+        elif match and match[2] == 'start_ai':
+            respond(202, store.start_ai(token, match[1], handler.headers.get('X-AfterWard-CSRF'), body))
         elif match and match[2]:
             respond(200, store.mutate(token, match[1], handler.headers.get('X-AfterWard-CSRF'), match[2], body))
         else:
@@ -156,7 +159,7 @@ def handle_http(handler, store, base='', *, allowed_hosts):
 class WorkspaceServer(ThreadingHTTPServer):
     daemon_threads = True
     def __init__(self, address, data, *, personal=False, tailscale=False, page_transcriber=None, public_host=None,
-                 allowed_pdf_digests=None, local_ocr=True):
+                 allowed_pdf_digests=None, local_ocr=True, ai=None):
         if personal and tailscale:
             raise ValueError('The personal workspace cannot be mounted on Tailscale.')
         if personal and address[0] not in ('127.0.0.1', 'localhost', '::1'):
@@ -166,7 +169,7 @@ class WorkspaceServer(ThreadingHTTPServer):
             raise ValueError('Configure one public hostname without a scheme or path.')
         self.public_host = public_host
         self.store = WorkspaceStore(data, personal=personal, page_transcriber=page_transcriber,
-                                    allowed_pdf_digests=allowed_pdf_digests, local_ocr=local_ocr)
+                                    allowed_pdf_digests=allowed_pdf_digests, local_ocr=local_ocr, ai=ai)
         super().__init__(address, WorkspaceHandler)
 
 

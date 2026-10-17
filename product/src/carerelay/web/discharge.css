@@ -11,3 +11,9 @@ a{color:var(--accent);text-underline-offset:4px}button,input,textarea,select{fon
 .guide{max-width:1080px;margin:0 auto;padding:48px 28px 80px}.guide h1{font:500 48px/1.15 Fraunces,serif}.guide>.card{margin:32px 0;scroll-margin-top:24px}.guide li{padding:7px 0 7px 8px}.guide blockquote{margin:12px 0;padding:16px 20px;border-left:3px solid var(--accent);background:var(--deep)}.expected{border-top:1px solid var(--line);margin-top:24px;padding-top:12px}.guide .actions{flex-wrap:wrap}
 @media(max-width:720px){.appbar nav{flex-wrap:wrap;flex-shrink:1}.appbar{padding:16px 18px}.collaboration-bar{padding:12px 18px}}
 @media(max-width:1000px){.staff-shell{grid-template-columns:240px 1fr}.columns{grid-template-columns:1fr}.appbar{flex-wrap:wrap}.patient-grid{grid-template-columns:1fr 1fr}.appbar .account{flex-wrap:wrap}}@media(max-width:720px){.staff-shell,.patient-grid,.landing .options,.two,.pdf-columns{grid-template-columns:1fr}.queue{display:none}.patient-shell{padding:20px 18px 50px}.workspace{padding:18px}.landing{padding:36px 18px}.landing h1{font-size:38px}.batchbar{position:static}}
+/* Keep source evidence and asynchronous progress visible beside AI suggestions. */
+.ai-progress,.ai-suggestion{border:1px solid var(--accent,#7cc8bb);background:#112c30;border-radius:12px;padding:18px;margin:18px 0}
+.finding{border-top:1px solid #35434e;padding:20px 0}
+.finding blockquote,.ai-suggestion blockquote{white-space:pre-wrap;border-left:3px solid #82b9b2;padding:12px 16px;margin:12px 0;background:#14232d}
+.ai-provenance{margin-top:20px;color:#adbdc9}
+.explain-form textarea{min-height:100px;width:100%}

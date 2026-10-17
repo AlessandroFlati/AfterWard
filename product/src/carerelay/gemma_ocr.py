@@ -40,11 +40,11 @@ class GemmaOCR:
         self.purpose = purpose
         self.expires = datetime.strptime(expires, '%Y-%m-%d').date()
 
-    def _request(self, path, payload=None):
+    def _request(self, path, payload=None, *, timeout=85):
         request = Request(BASE + path, data=json.dumps(payload).encode() if payload else None,
             headers={'Authorization': 'Bearer ' + self.key, 'Content-Type': 'application/json'})
         try:
-            with build_opener(_NoRedirect()).open(request, timeout=85 if payload else 15) as response:
+            with build_opener(_NoRedirect()).open(request, timeout=timeout if payload else 15) as response:
                 raw = response.read(256001)
             if len(raw) > 256000:
                 raise ValueError('Response limit')
@@ -52,12 +52,12 @@ class GemmaOCR:
         except HTTPError as exc:
             status = exc.code
             exc.close()
-            raise DocumentError(f'AMD could not complete transcription (HTTP {status}). Your PDF remains available. You can retry.') from None
+            raise DocumentError(f'AMD could not complete this request (HTTP {status}). Your documents remain available. You can retry.') from None
         except (URLError, OSError, HTTPException, ValueError, InferenceError):
-            raise DocumentError('AMD could not complete transcription. Your PDF remains available. You can retry; no local inference is started.') from None
+            raise DocumentError('AMD could not complete this request. Your documents remain available. You can retry; no local inference is started.') from None
 
     @contextmanager
-    def _attempt(self):
+    def _attempt(self, subject='workspace-gemma-ocr'):
         """Use the existing shared ledger; never extend or reset its allocation."""
         if not self.budget_path.is_file():
             raise DocumentError('AMD quota ledger unavailable.')
@@ -94,12 +94,39 @@ class GemmaOCR:
             now = datetime.now(timezone.utc)
             with closing(sqlite3.connect(self.budget_path, timeout=10)) as db, db:
                 db.execute('INSERT INTO inference_attempts VALUES (?,?,?)', (identifier, now.date().isoformat(), now.isoformat()))
-                db.execute('INSERT INTO attempt_context VALUES (?,?,?)', (identifier, self.purpose, 'workspace-gemma-ocr'))
+                db.execute('INSERT INTO attempt_context VALUES (?,?,?)', (identifier, self.purpose, subject))
                 db.execute('UPDATE inference_lease SET last_started=? WHERE active_id=?', (now.isoformat(), identifier))
             yield identifier
         finally:
             with closing(sqlite3.connect(self.budget_path, timeout=10)) as db, db:
                 db.execute('UPDATE inference_lease SET active_id=NULL WHERE active_id=?', (identifier,))
+
+    def chat(self, prompt, context, *, effort, stage):
+        """Bounded JSON completion; all features use the same free-quota ledger."""
+        if effort not in ('none', 'medium'):
+            raise ValueError('Unsupported reasoning effort.')
+        started = time.perf_counter()
+        payload = {'model': MODEL, 'stream': False, 'reasoning_effort': effort, 'temperature': 0,
+            'max_tokens': 8192, 'response_format': {'type': 'json_object'},
+            'messages': [{'role': 'system', 'content': prompt},
+                         {'role': 'user', 'content': json.dumps(context, ensure_ascii=False)}]}
+        with self._attempt('workspace-' + stage) as identifier:
+            response = self._request('/chat/completions', payload, timeout=180)
+        metadata = {'model': MODEL, 'provider': 'amd_api', 'reasoning_effort': effort,
+            'stage': stage, 'attempt_id': identifier, 'at_utc': datetime.now(timezone.utc).isoformat(),
+            'elapsed_seconds': round(time.perf_counter()-started, 2),
+            'usage': {k: v for k, v in (response.get('usage') or {}).items()
+                      if k in ('prompt_tokens','completion_tokens','total_tokens') and type(v) is int}}
+        try:
+            choice = response['choices'][0]
+            if (response.get('model') not in (MODEL, 'self-dploy/' + MODEL)
+                    or choice['finish_reason'] != 'stop' or choice['message'].get('tool_calls')
+                    or choice['message'].get('refusal')):
+                raise ValueError('Incomplete model response')
+            content = choice['message']['content']
+            return strict_json(content), metadata
+        except (ValueError, KeyError, TypeError, IndexError):
+            raise DocumentError('Gemma returned an incomplete or invalid response. No result was accepted. Retry the check.') from None
 
     def transcribe_page(self, image, reference):
         if not isinstance(image, bytes) or not image.startswith(b'\x89PNG') or len(image) > 16 * 1024 * 1024:

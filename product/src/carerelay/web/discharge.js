@@ -68,7 +68,7 @@ function landing() {
   return `<main class="landing" id="main"><a class="brand" href="${base}/">After<span>Ward</span></a><div class="eyebrow">Interactive demo</div>
     <h1>One discharge.<br>A conversation that continues.</h1><p class="lede">Patient and ward share one case. Every question keeps its own conversation.</p>
     <div class="actions"><a class="button primary" href="${base}/judge-guide">Try the guided cases</a><a class="button" href="${base}/presentation">Video and presentation walkthrough</a></div>
-    <p class="notice-inline">Explore with example documents and identities. Replies are written by the person using the staff view; no external messages are sent. ${['127.0.0.1','localhost'].includes(location.hostname) ? 'For a personal PDF, use the <a href="http://127.0.0.1:8777/">separate local workspace</a>.' : 'Only invented, non-sensitive documents may be used in this demo.'}</p>
+    <p class="notice-inline">Explore with example documents and identities. AI suggests; people review and choose what to send. No external messages are sent. ${['127.0.0.1','localhost'].includes(location.hostname) ? 'For a personal PDF, use the <a href="http://127.0.0.1:8777/">separate local workspace</a>.' : 'Only invented, non-sensitive documents may be used in this demo.'}</p>
     <div class="options"><section class="card"><h2>The patient has their documents</h2><p>The letter is available. Ask a question and answer it from the ward view.</p><button class="primary" data-start="hospital">Start as a patient</button></section>
     <section class="card"><h2>The ward prepares discharge</h2><p>Review the case and choose the documents to share.</p><button data-start="before_delivery">Start as ward staff</button></section>
     <section class="card"><h2>The patient brings a PDF</h2><p>Try PDF intake, OCR and questions with an example document.</p><button data-start="patient">Start with a PDF</button></section></div>
@@ -91,7 +91,7 @@ function shell(content) {
 }
 function documentsView() {
   return `<h1>${role==='staff'?'Discharge documents':'Your documents'}</h1><p class="lede">${role==='staff'?'Review the case and choose what to share with the patient.':'Open a document or add a PDF. Find questions and replies under My questions.'}</p>
-    <div class="actions"><a class="button primary" href="#add">Upload a PDF</a><a class="button" href="#requests">${role==='staff'?'Open questions':'Open questions and replies'}</a></div>
+    <div class="actions">${config.ai_enabled?'<a class="button primary" href="#check">Check documents with AI</a>':''}<a class="button" href="#add">Upload a PDF</a><a class="button" href="#requests">${role==='staff'?'Open questions':'Open questions and replies'}</a></div>
     ${state.uploads.filter(u=>!u.confirmed).map(u=>`<a class="card request-link open" href="#upload-${u.id}"><strong>${esc(u.title)}</strong><span>Text extracted: review each page to finish adding this document</span></a>`).join('')}
     <div class="stack">${state.documents.length?state.documents.map(d=>`<section class="card"><div class="row"><h2><a href="#reader-${d.identifier}">${esc(d.title)}</a></h2><span class="chip">${d.origin==='personal'?'Added by you':d.delivered?'Available to the patient':'In the ward case file'}</span></div><p>${d.demo_pdf||d.upload_id?'PDF document · original and transcription available':esc(d.text.slice(0,180))}</p><a class="button" href="#reader-${d.identifier}">Open document</a>
       ${role==='staff'&&d.approved?`<label class="check"><input type="checkbox" name="document" value="${d.identifier}" data-persist="doc-${d.identifier}">Include when sharing</label>`:''}</section>`).join(''):empty('No documents yet. Upload your first PDF.')}</div>
@@ -103,7 +103,42 @@ function readerView(id) {
   const pdfBase=upload?`${base}/api/${role}/uploads/${upload.id}`:doc.demo_pdf?`${base}/api/${role}/documents/${doc.identifier}`:null;
   return `${breadcrumbs(doc.title,'documents','Documents')}<h1>${esc(doc.title)}</h1><div class="actions"><a class="button" href="#documents">Back to documents</a>${pdfBase?`<a class="button" href="${pdfBase}/0" target="_blank" rel="noopener">Open original PDF</a>`:''}${role!=='staff'?'<a class="button primary" href="#questions">Ask about this document</a>':'<a class="button" href="#requests">Back to questions</a>'}</div>
     ${upload?upload.pages.map(p=>`<section class="card"><h2>Page ${p.number}</h2><div class="pdf-columns"><a href="${pdfBase}/${p.number}" target="_blank" rel="noopener"><img class="pdf-page" src="${pdfBase}/${p.number}" alt="Original, page ${p.number}"></a><div><p class="muted">${p.method==='gemma_api'?'Gemma via AMD API':p.method==='ocr'?'OCR transcription':'PDF text'} · Reviewed by the person who added it</p><div class="quote">${esc(p.text)}</div></div></div>${readingComparison(upload,p)}</section>`).join(''):doc.demo_pdf?`<article class="card"><a href="${pdfBase}/0" target="_blank" rel="noopener"><img class="pdf-page demo-original" src="${pdfBase}/1" alt="${esc(doc.title)}: original PDF page"></a><details><summary>Show document text</summary><div class="quote">${esc(doc.text)}</div></details></article>`:`<article class="card"><div class="quote">${esc(doc.text)}</div></article>`}
-    <p class="muted">Automatic explanations are not connected to this screen yet.</p>`;
+    ${explanationView(doc)}`;
+}
+function executionDetails(result) {
+  if(!result)return '';
+  const calls=result.calls||[];
+  return `<details class="ai-provenance"><summary>How this result was produced</summary><p>Gemma-4-31B-IT on AMD API. ${calls.length} request${calls.length===1?'':'s'}; ${calls.reduce((n,c)=>n+c.elapsed_seconds,0).toFixed(1)} s of model requests.</p><ul>${calls.map(c=>`<li>${esc(c.stage)}: reasoning ${esc(c.reasoning_effort)}, ${c.usage?.total_tokens??'unreported'} tokens</li>`).join('')}</ul><p class="muted">${esc(result.prompt_version)}. Exact source checks verify provenance, not clinical correctness.</p></details>`;
+}
+function jobStatus(job) {
+  if(!job)return '';
+  if(['queued','running'].includes(job.status))return `<div class="ai-progress" role="status"><strong>${esc(job.stage)}</strong><p>You can leave this page and return. The check runs on the server and may take several minutes.</p></div>`;
+  if(job.status==='failed')return `<p class="notice-inline" role="alert">${esc(job.message)} No successful result is being substituted.</p>`;
+  if(job.stale)return '<p class="notice-inline">The documents or conversation changed. Run a new check before using this result.</p>';
+  return '';
+}
+function checkView() {
+  const job=state.ai_jobs.filter(j=>j.kind==='analyze').at(-1);
+  const findings=job?.status==='completed'&&!job.stale?job.result.findings:null;
+  return `${breadcrumbs('Document check','documents','Documents')}<h1>${role==='staff'?'Check before discharge':'Check your documents'}</h1><p class="lede">Find points that may need clarification, with the original passages beside each suggestion.</p>
+    <form id="check-form" class="card"><h2>Which documents should be checked together?</h2><p>${role==='staff'?'These are the documents in the ward case file, including those not yet shared.':'Only documents available to you are included. If you already have a paper copy of a referenced sheet, add it before checking again.'}</p>
+    ${state.documents.map(d=>`<label class="check"><input type="checkbox" name="check-document" value="${esc(d.identifier)}" checked data-persist="check-doc-${d.identifier}">${esc(d.title)}</label>`).join('')}
+    <p class="muted">Up to five pages per check. Two passes, plus a conflict comparison when needed; reasoning medium. ${role==='staff'?'Review the suggestions against the sources before sharing documents.':'Review the suggestions before deciding to contact the ward.'}</p><button class="primary" ${!config.ai_enabled||state.ai_pending||!state.documents.length?'disabled':''}>${job?'Run a new check':'Check selected documents'}</button>${state.ai_pending?'<p>A check is already running for this case.</p>':''}</form>
+    ${jobStatus(job)}${findings?`<section class="card"><h2>${findings.length?`${findings.length} point${findings.length===1?'':'s'} to review`:'No clarification points identified'}</h2><p class="muted">Checked: ${job.payload.documents.map(id=>esc(state.documents.find(d=>d.identifier===id)?.title||id)).join(', ')}.</p><p>${findings.length?'These are suggestions based on the checked documents. A referenced sheet may already be in your possession.':'The model found no supported gaps in this run. This does not establish clinical completeness or correctness.'}</p>
+    ${findings.map(f=>`<article class="finding"><h3>${esc(f.label)}</h3>${f.citations.map(c=>`<a href="#reader-${esc(c.document_id)}">${esc(c.title)} - page ${c.document_page}</a><blockquote>${esc(c.quote)}</blockquote>`).join('')}<p>${esc(f.question)}</p>${role!=='staff'?`<label class="check"><input type="checkbox" name="finding" value="${esc(f.key)}" data-persist="finding-${job.id}-${esc(f.key)}" ${(job.asked_keys||[]).includes(f.key)?'disabled':''}>${(job.asked_keys||[]).includes(f.key)?'Already added to My questions':'Include this question'}</label>`:'<p class="muted">Review the source and update or add the relevant document before sharing. This check does not send anything to the patient.</p>'}</article>`).join('')}
+    ${role!=='staff'&&findings.length?`<div class="actions"><button class="primary" data-action="ask-findings" data-job="${job.id}">Send selected questions together</button><a class="button" href="#add">I have another sheet to add</a></div>`:''}${executionDetails(job.result)}</section>`:''}<a class="button" href="#documents">Back to documents</a>`;
+}
+function explanationView(doc) {
+  const job=state.ai_jobs.filter(j=>j.kind==='explain'&&j.payload.documents.includes(doc.identifier)).at(-1);
+  const explanations=state.explanations.filter(e=>e.document_id===doc.identifier);
+  return `<section class="card"><h2>Understand this passage</h2>${config.ai_enabled?`<form class="explain-form" data-document="${esc(doc.identifier)}"><label for="quote-${doc.identifier}">Copy the exact passage you would like explained</label><textarea id="quote-${doc.identifier}" name="quote" maxlength="5000" data-persist="explain-${doc.identifier}" required>${esc(doc.text.split('\n').find(p=>p.trim())||'')}</textarea><p class="muted">Gemma prepares a plain-language explanation. Ward staff review it before it is shown to the patient. If the passage needs new clinical information, ask the ward directly.</p><button ${state.ai_pending?'disabled':''}>Prepare explanation for review</button></form>`:'<p>AI explanations are disabled on this server.</p>'}
+    ${jobStatus(job)}${job?.status==='completed'&&!job.stale&&role!=='staff'&&!explanations.some(e=>e.id===job.result?.explanation_id)?'<p class="notice-inline">Explanation prepared and waiting for ward review. In this demo, switch to ward view and open this document to review it.</p>':''}
+    ${explanations.map(e=>`<article class="finding"><h3>${e.approved?'Explanation reviewed by the ward':'AI explanation awaiting review'}</h3><blockquote>${esc(e.source_quote)}</blockquote><p>${esc(e.plain_language)}</p>${e.needs_clarification?'<p class="notice-inline">This passage needs clarification from staff; this draft cannot be published as an explanation.</p>':role==='staff'&&!e.approved?`<button data-action="approve-explanation" data-id="${e.id}">I reviewed this explanation: make it available</button>`:''}</article>`).join('')}
+    ${role!=='staff'?'<a class="button" href="#questions">Ask the ward about this passage</a>':''}</section>`;
+}
+function aiReply(q) {
+  const job=state.ai_jobs.filter(j=>j.kind==='draft'&&j.payload.question_id===q.id).at(-1);
+  return `${config.ai_enabled?`<button type="button" data-action="draft-ai" data-question="${q.id}" ${state.ai_pending?'disabled':''}>Suggest a reply from the documents</button>`:''}${jobStatus(job)}${job?.status==='completed'&&!job.stale?`<section class="ai-suggestion"><strong>AI suggestion - review before use</strong><p>${esc(job.result.text)}</p>${job.result.needs_clarification?'<p class="muted">Staff need to supply or clarify information before answering fully.</p>':''}${job.result.citations.map(c=>`<details><summary>${esc(c.title)} - page ${c.document_page}</summary><blockquote>${esc(c.quote)}</blockquote></details>`).join('')}<button type="button" data-action="use-ai-draft" data-job="${job.id}" data-question="${q.id}">Use in my reply editor</button>${executionDetails(job.result)}</section>`:''}`;
 }
 function uploadForm() {
   return `${breadcrumbs('Add PDF','documents','Documents')}<h1>Add your document</h1><p>PDFs may contain selectable text or scans. After extraction, you can review and correct every page.</p>
@@ -143,7 +178,7 @@ function staffEditor(q) {
   if(!waiting(q))return `<p class="muted">${q.status==='resolved'?'The patient confirmed that their question is resolved.':'Reply sent. The patient decides whether their question is resolved.'}</p>`;
   const draft=state.replies.filter(r=>!r.delivered&&r.covered.length===1&&r.covered[0]===q.id).at(-1);
   return `<form class="reply-form" data-question="${q.id}" data-reply="${draft?.id||''}"><label for="reply-${q.id}">Reply to the ${q.messages.length>1?'latest follow-up':'patient'}</label><textarea id="reply-${q.id}" name="text" maxlength="10000" data-persist="reply-${q.id}" required placeholder="Write your reply directly. No additional documents are required.">${esc(draft?.text||'')}</textarea>
-    <div class="actions"><button type="submit">${draft?'Save changes':'Save draft'}</button>${draft?`<label class="check"><input type="checkbox" name="send-reply" value="${draft.id}" data-persist="send-${draft.id}">Include this reply in the selected batch</label>`:'<small>Save to select this reply and send it with others.</small>'}</div></form>`;
+    <div class="actions"><button type="submit">${draft?'Save changes':'Save draft'}</button>${draft?`<label class="check"><input type="checkbox" name="send-reply" value="${draft.id}" data-persist="send-${draft.id}">Include this reply in the selected batch</label>`:'<small>Save to select this reply and send it with others.</small>'}</div>${aiReply(q)}</form>`;
 }
 function patientThreadActions(q) {
   if(q.status==='answered'||q.status==='resolved')return `<div class="thread-outcome">${q.status==='resolved'?'<p class="ack">You confirmed this question is resolved. You can reopen the conversation if needed.</p>':`<div class="actions"><button class="primary" data-action="understood" data-question="${q.id}" data-reply="${q.answered_by}">I understand, question resolved</button></div>`}
@@ -157,13 +192,14 @@ function threadCard(q,full=false) {
   return `<article class="card thread-card ${q.active_reminders.length?'reminded':''}" id="question-${q.id}"><div class="row"><h2>${full?esc(q.text):`<a href="#thread-${q.id}">${esc(q.text)}</a>`}</h2>${chip(q)}</div>
     ${q.active_reminders.length?`<div class="reminder-banner"><strong>${q.active_reminders.length} reminder${q.active_reminders.length>1?'s':''} for this question</strong><span>Latest: ${stamp(q.active_reminders.at(-1).at_utc)}</span></div>`:''}
     ${!full&&q.messages.length>1?`<div class="quote"><small>Latest patient follow-up</small>${esc(q.messages.at(-1).text)}</div>`:''}
+    ${q.source_finding?`<details><summary>Original passages behind this question</summary>${q.source_finding.citations.map(c=>`<a href="#reader-${esc(c.document_id)}">${esc(c.title)} - page ${c.document_page}</a><blockquote class="quote">${esc(c.quote)}</blockquote>`).join('')}<p class="muted">Source text captured when the question was created.</p></details>`:''}
     ${full?`<div class="conversation">${conversationHistory(q)}</div>`:`<details><summary>Read the full conversation</summary><div class="conversation">${conversationHistory(q)}</div></details>`}
     ${role==='staff'?staffEditor(q):patientThreadActions(q)}</article>`;
 }
 const batchBar=()=>'<section class="batchbar" aria-label="Send replies"><div><strong>Send completed replies</strong><p>Select saved drafts below. The others stay in preparation.</p></div><div class="actions"><button data-action="select-replies">Select all drafts</button><button class="primary" id="send-selected" data-action="send-batch" disabled>Send selected (0)</button></div></section>';
 function requestsView() {
   const notified=state.questions.filter(q=>q.active_reminders.length);
-  if(role==='staff')return `<h1>Questions and replies</h1><p>Read each conversation, prepare replies and send your selection from this page.</p>${notified.length?`<div class="reminder-banner"><strong>${notified.length} ${notified.length===1?'question with a reminder':'questions with reminders'} from the patient</strong><div>${notified.map(q=>`<a href="#thread-${q.id}">${esc(q.text)}</a>`).join(' · ')}</div></div>`:''}${batchBar()}<div class="stack">${state.questions.length?staffQuestions().map(q=>threadCard(q)).join(''):empty('No questions yet. Open the patient view to start.')}</div>`;
+  if(role==='staff')return `<h1>Questions and replies</h1><p>Read each conversation, prepare replies and send your selection from this page.</p>${state.explanations.some(e=>!e.approved)?`<section class="card"><h2>Explanations awaiting review</h2>${state.explanations.filter(e=>!e.approved).map(e=>`<p><a href="#reader-${e.document_id}">${esc(e.source_quote.slice(0,120))}</a></p>`).join('')}</section>`:''}${notified.length?`<div class="reminder-banner"><strong>${notified.length} ${notified.length===1?'question with a reminder':'questions with reminders'} from the patient</strong><div>${notified.map(q=>`<a href="#thread-${q.id}">${esc(q.text)}</a>`).join(' · ')}</div></div>`:''}${batchBar()}<div class="stack">${state.questions.length?staffQuestions().map(q=>threadCard(q)).join(''):empty('No questions yet. Open the patient view to start.')}</div>`;
   return `<h1>My questions</h1><p>Open a question to read the reply and continue the same conversation.</p><div class="actions"><a class="button primary" href="#questions">New question</a>${personal()?'<button data-action="export">Export questions and conversations</button>':''}</div>${state.closed?'<p class="ack">You confirmed that all questions are resolved.</p>':''}
     <div class="stack">${state.questions.length?state.questions.map(q=>{const reply=state.replies.find(r=>r.id===q.answered_by);
       return `<section class="card"><a class="request-link" href="#thread-${q.id}"><div class="row"><h2>${esc(q.text)}</h2>${chip(q)}</div><p>${esc(q.status==='answered'?reply?.text.slice(0,200):q.messages.at(-1).text)}</p><span>${q.status==='answered'?'Read the reply and respond':'Open the conversation'} →</span></a>
@@ -185,7 +221,7 @@ function render() {
   const current=page();let content;
   if(current.startsWith('thread-')){const q=state.questions.find(q=>q.id===current.slice(7));content=breadcrumbs('Conversation')+(q?`${role==='staff'?batchBar():''}${threadCard(q,true)}<div class="actions"><a class="button" href="#requests">Back to all questions</a>${personal()?'<button data-action="export">Export conversations</button>':''}</div>`:empty('Question unavailable.'));}
   else if(['requests','status','answers','request','review'].includes(current))content=requestsView();
-  else if(current==='questions')content=askView();else if(current==='add')content=uploadForm();
+  else if(current==='check')content=checkView();else if(current==='questions')content=askView();else if(current==='add')content=uploadForm();
   else if(current.startsWith('upload-'))content=reviewUpload(current.slice(7));else if(current.startsWith('reader-'))content=readerView(current.slice(7));
   else if(current==='share')content=shareView();else if(current==='settings')content=settingsView();else content=documentsView();
   app.innerHTML=shell(content);restore();
@@ -225,6 +261,16 @@ app.addEventListener('click',async event=>{
     if(action==='invite'){const result=await request('invite',{role:el.dataset.role});inviteLink=`${config.share_base||location.origin+base}/#join=${result.code}`;render();notice('Link ready: open it on the other device within 10 minutes.');}
     if(action==='copy-invite'){try{await navigator.clipboard.writeText(inviteLink);notice('Link copied.');}catch(error){const field=document.querySelector('#invite-link');field.focus();field.select();notice('Selected: copy the link.');}}
     if(action==='refresh'){remember();state=await request(role);render();notice('Case refreshed.');}
+    if(action==='ask-findings')await mutate('ask_findings',{job_id:el.dataset.job,keys:selected('finding')},'Selected questions are available to the ward.','requests');
+    if(action==='approve-explanation')await mutate('approve_explanation',{explanation_id:el.dataset.id},'Reviewed explanation is available with the source document.');
+    if(action==='draft-ai')await mutate('start_ai',{kind:'draft',question_id:el.dataset.question,documents:state.documents.map(d=>d.identifier)},'Preparing an optional draft. You can keep writing your own reply.');
+    if(action==='use-ai-draft'){
+      const job=state.ai_jobs.find(j=>j.id===el.dataset.job);
+      if(!job||job.stale)return notice('Request a new draft for the current conversation.');
+      const editor=document.querySelector(`#reply-${el.dataset.question}`);
+      if(editor.value.trim()&&!await confirmAction('Replace the text in this editor?',`<p>Your current unsaved text will be replaced with the AI suggestion. The reply will remain a draft.</p>`,'Use suggestion'))return;
+      editor.value=job.result.text;remember();editor.focus();notice('Review and edit the suggestion, then save your draft.');
+    }
     if(action==='read-page'){
       busy=true;el.disabled=true;el.textContent='Gemma is reading through the AMD API…';
       try{await readPage(el.dataset.upload,Number(el.dataset.page));notice('Gemma transcription ready: compare it with the page.');}
@@ -251,7 +297,9 @@ app.addEventListener('click',async event=>{
 app.addEventListener('submit',async event=>{
   event.preventDefault();if(busy)return;const form=event.target;
   try{
-    if(form.id==='ask-form'){const questions=form.elements.questions.value.split('\n').map(s=>s.trim()).filter(Boolean);if(!questions.length||questions.length>10||questions.some(q=>q.length>2000))return notice('Enter 1 to 10 questions, up to 2,000 characters each.');await mutate('ask',{questions},personal()?'Questions prepared. You can now export them.':'Questions available to the ward.','requests',['questions']);}
+    if(form.id==='check-form')await mutate('start_ai',{kind:'analyze',documents:selected('check-document')},'Document check started. Progress appears here.');
+    else if(form.classList.contains('explain-form'))await mutate('start_ai',{kind:'explain',documents:[form.dataset.document],quote:form.elements.quote.value},'Explanation requested. Ward review is required before publication.');
+    else if(form.id==='ask-form'){const questions=form.elements.questions.value.split('\n').map(s=>s.trim()).filter(Boolean);if(!questions.length||questions.length>10||questions.some(q=>q.length>2000))return notice('Enter 1 to 10 questions, up to 2,000 characters each.');await mutate('ask',{questions},personal()?'Questions prepared. You can now export them.':'Questions available to the ward.','requests',['questions']);}
     else if(form.classList.contains('reply-form')){const q=form.dataset.question;await mutate('draft',{text:form.elements.text.value,covered:[q],reply_id:form.dataset.reply||undefined},'Draft saved. You can select it to send.',undefined,['reply-'+q]);}
     else if(form.classList.contains('follow-form'))await mutate('follow_up',{question_id:form.dataset.question,reply_id:form.dataset.reply,text:form.elements.text.value},'Follow-up added to the same conversation.',undefined,['follow-'+form.dataset.question]);
     else if(form.classList.contains('external-form'))await mutate('external_reply',{question_id:form.dataset.question,text:form.elements.text.value,source:form.elements.source.value},'Reply recorded with the source you provided.',undefined,['external-'+form.dataset.question]);
@@ -277,9 +325,9 @@ async function refreshWhenIdle(){
   if(!role||!state||busy||polling||document.hidden||document.querySelector('#confirm').open)return;
   if(['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName))return;
   polling=true;
-  try{const latest=await request(role);if(latest.csrf===state.csrf&&latest.revision>state.revision&&!busy
+  try{const latest=await request(role);if(latest.csrf===state.csrf&&(latest.revision>state.revision||latest.ai_revision>state.ai_revision)&&!busy
       &&!document.querySelector('#confirm').open&&!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)){
-      remember();state=latest;render();notice('The conversation was updated.');}}
+      const aiChanged=latest.ai_revision>state.ai_revision;remember();state=latest;render();notice(aiChanged?'AI check updated.':'The conversation was updated.');}}
   catch(error){const control=app.querySelector('[data-action="refresh"]');if(control)control.textContent='Check connection: refresh';}
   finally{polling=false;}
 }

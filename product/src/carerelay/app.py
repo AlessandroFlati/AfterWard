@@ -9,6 +9,7 @@ import sqlite3
 
 from .discharge_http import WorkspaceServer
 from .gemma_ocr import GemmaOCR
+from .discharge_ai import DischargeAI
 
 
 def initialize_budget(path, *, total, daily):
@@ -48,6 +49,7 @@ def create_server(environ=None):
         raise ValueError('The persistent data directory must already be mounted for hosted operation.')
     data_dir.mkdir(parents=True, exist_ok=True)
     transcriber = None
+    ai = None
     if env.get('AFTERWARD_AMD_ENABLED') == '1':
         if env.get('AFTERWARD_AMD_FREE_QUOTA_CONFIRMED') != '1':
             raise ValueError('Confirm the free AMD entitlement before enabling API calls.')
@@ -57,14 +59,15 @@ def create_server(environ=None):
         budget = data_dir / 'ocr-budget.sqlite3'
         initialize_budget(budget, total=int(env.get('AFTERWARD_API_TOTAL_LIMIT', '200')),
                           daily=int(env.get('AFTERWARD_API_DAILY_LIMIT', '100')))
-        transcriber = GemmaOCR(env.get('AMD_TOKEN_FACTORY_API_KEY') or env.get('AFTERWARD_AMD_API_KEY'),
-                              budget, purpose='public_demo', expires=expires).transcribe_page
+        client = GemmaOCR(env.get('AMD_TOKEN_FACTORY_API_KEY') or env.get('AFTERWARD_AMD_API_KEY'),
+                         budget, purpose='public_demo', expires=expires)
+        transcriber, ai = client.transcribe_page, DischargeAI(client)
     # Public deployments accept only packaged invented PDFs, not visitors' health data.
     samples = Path(__file__).parent / 'assets' / 'demo'
     allowed = {hashlib.sha256(p.read_bytes()).hexdigest() for p in samples.glob('*.pdf')} if hosted else None
     server = WorkspaceServer(('0.0.0.0' if hosted else '127.0.0.1', port), data_dir / 'workspaces.sqlite3',
                              page_transcriber=transcriber, public_host=public_host,
-                             allowed_pdf_digests=allowed, local_ocr=False)
+                             allowed_pdf_digests=allowed, local_ocr=False, ai=ai)
     return server
 
 

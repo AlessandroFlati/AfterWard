@@ -22,10 +22,15 @@
 !product/src/carerelay/assets/demo/discharge-scan.pdf
 !product/src/carerelay/assets/demo/letter.pdf
 !product/src/carerelay/assets/demo/rehab.pdf
+!product/src/carerelay/assets/prompts/document-facts.txt
+!product/src/carerelay/assets/prompts/document-findings.txt
+!product/src/carerelay/assets/prompts/document-pairs.txt
 !product/src/carerelay/demo_documents.py
+!product/src/carerelay/discharge_ai.py
 !product/src/carerelay/discharge_flow.py
 !product/src/carerelay/discharge_http.py
 !product/src/carerelay/discharge_service.py
+!product/src/carerelay/document_checks.py
 !product/src/carerelay/documents.py
 !product/src/carerelay/evidence.py
 !product/src/carerelay/foundation/__init__.py
@@ -49,4 +54,5 @@
 !product/src/carerelay/web/judge-guide.html
 !product/src/carerelay/web/presentation.html
 !product/tests_release/test_release.py
+!product/tests_release/test_workspace_ai.py
 !railway.json

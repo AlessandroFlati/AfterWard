@@ -314,10 +314,12 @@ class DischargeFlow:
 
     def submit_explanation(self, actor, document_id, selected_quote, output, provenance, revision):
         with self.lock:
-            self.check(actor, "explain", revision)
-            document = self.documents.get(document_id)
-            if document is None or not document.approved:
-                raise FlowError("An approved current source is required.")
+            self.check(actor, "explain" if actor.role == "staff" else "read", revision)
+            visible = self.documents if actor.role == "staff" else {
+                **self.delivered, **{k: d for k, d in self.documents.items() if k in self.personal_documents}}
+            document = visible.get(document_id)
+            if document is None:
+                raise FlowError("A source visible to this person is required.")
             value = validate_explanation(document, selected_quote, output)
             if type(provenance) is not dict or set(provenance) != {"model", "run_id", "mode"} or provenance["mode"] not in {"recorded", "live", "offline_contract_test"}:
                 raise FlowError("Explicit execution provenance is required.")
@@ -325,7 +327,7 @@ class DischargeFlow:
                 raise FlowError("Invalid execution provenance.")
             identifier = uuid.uuid4().hex
             self.explanations[identifier] = {**value, "id": identifier, "document_id": document_id,
-                "provenance": deepcopy(provenance), "approved": False, "reviewer": None}
+                "provenance": deepcopy(provenance), "approved": False, "reviewer": None, "requested_by": actor.subject}
             self.event(actor, "explanation_drafted", explanation=identifier)
             return identifier
 

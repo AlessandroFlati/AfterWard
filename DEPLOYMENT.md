@@ -14,7 +14,7 @@ The deployment is one replica. It uses `/data/afterward-workspace/workspaces.sql
 | `AFTERWARD_DATA_DIR` | `/data/afterward-workspace` |
 | `AFTERWARD_PUBLIC_HOST` | `afterward-demo.up.railway.app` (hostname only) |
 | `PORT` | Let Railway inject it; configure the generated domain to target that port |
-| `AFTERWARD_AMD_ENABLED` | `1` for the live OCR demo, `0` for an explicit workflow-only run |
+| `AFTERWARD_AMD_ENABLED` | `1` for live OCR, document checks, explanations and reply drafts; `0` for workflow only |
 | `AMD_TOKEN_FACTORY_API_KEY` | Existing secret, entered in Railway Variables; never put it in Git or a build argument |
 | `AFTERWARD_AMD_FREE_QUOTA_CONFIRMED` | `1` only while the free account entitlement is verified |
 | `AFTERWARD_API_EXPIRES` | Last intended demonstration date in UTC, for example `2026-10-25` for this event |
@@ -47,11 +47,11 @@ During `link`, select the existing project, `production` and `afterward-demo`. C
 ## Verify before sharing with judges
 
 1. `/health` returns `200` with application `AfterWard`.
-2. `/api/config` shows `ocr_provider: amd_api` and `packaged_uploads_only: true` for the live OCR demo.
+2. `/api/config` shows `ocr_provider: amd_api`, `ai_enabled: true` and `packaged_uploads_only: true` for the live OCR demo.
 3. `/judge-guide` and `/presentation` are English and all four example PDF downloads work.
-4. Complete the guided missing-handout case, including a follow-up and patient resolution.
+4. Complete the guided missing-handout check, source-linked question, optional AI reply, follow-up and patient resolution. Verify that unreviewed explanations and unsent reply drafts stay private.
 5. Open a one-use invite in another browser and confirm the same case code and two-way replies.
-6. Upload the supplied scan and inspect an actual Gemma result. A successful healthcheck alone does not prove AMD access.
+6. Upload the three-page reconstructed scan and inspect actual Gemma results on every page. Accept reviewed text, then run documentary analysis. A successful healthcheck alone does not prove AMD access.
 7. Restart the service and verify that the active case and quota counts persist. Do not delete the quota database to refresh allocation.
 
 The source image can be checked locally without enabling API calls:

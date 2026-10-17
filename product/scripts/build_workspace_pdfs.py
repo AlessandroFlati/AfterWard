@@ -1,14 +1,10 @@
 """Build PDF originals from the existing demonstration fixture text."""
 from pathlib import Path
-from io import BytesIO
 import sys
 
 from reportlab.lib import colors
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.pdfgen import canvas
-from reportlab.lib.utils import ImageReader
-import pypdfium2 as pdfium
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT/'product/src'))
@@ -36,18 +32,7 @@ def main():
         flow.extend(Paragraph(part.replace('\n','<br/>'), body) for part in text.strip().split('\n\n'))
         SimpleDocTemplate(str(output/f'{identifier}.pdf'), pagesize=(595,842), leftMargin=48, rightMargin=48,
             topMargin=108, bottomMargin=65, title=TITLES[identifier], author='AfterWard').build(flow, onFirstPage=frame)
-    with pdfium.PdfDocument(output/'letter.pdf') as source:
-        page = source[0]
-        bitmap = page.render(scale=2)
-        image = bitmap.to_pil().copy()
-        bitmap.close()
-        page.close()
-    scan = canvas.Canvas(str(output/'discharge-scan.pdf'), pagesize=(595,842))
-    scan.setTitle('Scanned demonstration discharge letter')
-    scan.setAuthor('AfterWard')
-    scan.drawImage(ImageReader(image), 0, 0, 595, 842)
-    scan.save()
-    print('Built three demonstration PDFs and a scanned letter.')
+    print('Built three demonstration PDFs. The separately reconstructed three-page OCR example is preserved.')
 
 
 if __name__ == '__main__':
