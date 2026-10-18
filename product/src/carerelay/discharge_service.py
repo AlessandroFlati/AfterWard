@@ -288,6 +288,7 @@ class WorkspaceStore:
                 key, text, created = self.glossary_queue.popleft()
             started = None
             error_type = None
+            validation_error = None
             try:
                 with self.ai_slot:
                     started = datetime.now(timezone.utc)
@@ -298,6 +299,7 @@ class WorkspaceStore:
                 status, output = 'completed', {'result': result, 'created_at_utc': created}
             except Exception as exc:
                 error_type = type(exc).__name__
+                validation_error = str(exc) if isinstance(exc, FlowError) else None
                 status, output = 'failed', {'message': 'Medical wording could not be prepared. You can retry or ask the ward.',
                                            'created_at_utc': created}
             finished = datetime.now(timezone.utc)
@@ -307,7 +309,7 @@ class WorkspaceStore:
                     db.execute('UPDATE glossary_cache SET status=?,updated_at_utc=?,record=? WHERE cache_key=?',
                         (status, finished.isoformat(), json.dumps(output), key))
                 print(json.dumps({'event': 'ai_task', 'at_utc': finished.isoformat(), 'kind': 'clinical-glossary',
-                    'status': status, 'error_type': error_type,
+                    'status': status, 'error_type': error_type, 'validation_error': validation_error,
                     'queue_seconds': round((started-datetime.fromisoformat(created)).total_seconds(), 2) if started else None,
                     'processing_seconds': round((finished-started).total_seconds(), 2) if started else None}), flush=True)
             except sqlite3.Error:

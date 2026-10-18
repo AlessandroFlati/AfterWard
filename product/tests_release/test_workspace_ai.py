@@ -65,6 +65,18 @@ class PipelineTests(unittest.TestCase):
             'plain_language': 'A guess must not be shown.', 'needs_clarification': True}]}])).glossary('PT requested.')
         self.assertEqual(result['terms'][0]['plain_language'], '')
 
+    def test_glossary_restores_source_line_break_without_changing_words(self):
+        quote = 'PARTIAL THROMBOPLASTIN TIME, GLUCOSE'
+        row = {'term': 'PARTIAL THROMBOPLASTIN TIME', 'source_quote': quote,
+               'plain_language': 'A blood clotting test.', 'needs_clarification': False}
+        source = 'PARTIAL THROMBOPLASTIN TIME,\nGLUCOSE'
+        result = DischargeAI(ScriptedClient([{'terms': [row]}])).glossary(source)
+        self.assertEqual(result['terms'][0]['source_quote'], source)
+        for invalid in [source+'\n'+quote, 'PARTIAL THROMBOPLASTIN TIME, NO GLUCOSE',
+                        'PARTIAL THROMBOPLASTIN TIME; GLUCOSE']:
+            with self.subTest(source=invalid), self.assertRaises(FlowError):
+                DischargeAI(ScriptedClient([{'terms': [row]}])).glossary(invalid)
+
     def test_one_correction_cannot_silently_accept_invalid_citations(self):
         bad = {**self.finding, 'citations': [{'source_id': 'p1l999'}]}
         client = ScriptedClient([{'facts': []}, {'findings': [bad], 'fact_checks': []}, {'findings': [bad], 'fact_checks': []}])

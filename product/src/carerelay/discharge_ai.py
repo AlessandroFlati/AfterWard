@@ -8,7 +8,7 @@ from .document_checks import (FIELD_FOR_GAP, indexed_pages, resolve_guarded_outp
 from .evidence import SourcePacket, SourcePage, Finding, Draft, cite, digest, validate_draft, question_text
 
 PROMPTS = Path(__file__).parent / 'assets/prompts'
-GLOSSARY_VERSION = 'clinical-glossary-en-2'
+GLOSSARY_VERSION = 'clinical-glossary-en-3'
 GLOSSARY_MODEL = 'Gemma-4-31B-IT'
 GLOSSARY = """Identify clinical wording in this discharge document that could confuse an
 adult with an ordinary general education, and explain it in everyday English.
@@ -167,8 +167,13 @@ class DischargeAI:
                 raise FlowError('The explanation has invalid fields.')
             term = bounded_text(item['term'], 160)
             quote = bounded_text(item['source_quote'], 1200)
-            if term not in quote or text.count(quote) != 1:
+            matches = list(re.finditer(r'\s+'.join(re.escape(part) for part in quote.split()), text))
+            if len(matches) != 1:
                 raise FlowError('A medical term could not be matched to its source passage.')
+            # Restore the literal source span after matching PDF layout whitespace only.
+            quote = matches[0].group(0)
+            if not re.search(r'\s+'.join(re.escape(part) for part in term.split()), quote):
+                raise FlowError('The selected term is absent from its source passage.')
             if type(item['plain_language']) is not str or len(item['plain_language']) > 1600:
                 raise FlowError('The explanation is outside the supported size.')
             plain = '' if item['needs_clarification'] else bounded_text(item['plain_language'], 1600)
