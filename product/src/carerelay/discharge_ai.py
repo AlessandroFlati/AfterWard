@@ -74,10 +74,15 @@ when the supplied content already identifies it. Cite the actual document's cont
 The text field is patient-facing: describe the current facts without claiming that
 the proposed sharing has happened. Keep the operational recommendation out of that text;
 the interface shows staff a separate document-sharing action for review and confirmation.
-For a request to receive a file, keep the reply to one short sentence identifying that
-the requested document is in the ward record. Do not recite its medical instructions
-or answer questions the patient did not ask. The sharing action is the useful next step.
+For a request to receive a file, keep the reply to one short sentence. ONLY when the
+actual requested file has its own supplied pages may you say it is in the ward record.
+A reference such as "sheet provided" does not establish that the sheet is in this record.
+If the actual file's pages are absent, say the selected documents do not include the
+requested sheet and staff need to locate it: needs_clarification=true, share_documents=[].
+Do not recite medical instructions or answer questions the patient did not ask.
 If it is already patient_available, point the patient to it and leave share_documents [].
+Still include a citation from that actual document, even when the reply only says the
+file is already available: citations must not be empty for that factual response.
 If absent, acknowledge that staff must obtain or clarify it; a mention is not an attachment.
 Only recommend documents needed for this question. For conflicting content, ask staff
 to reconcile it rather than recommending indiscriminate sharing.
@@ -294,7 +299,7 @@ class DischargeAI:
         if set(value['share_documents']) - (shareable & cited_documents):
             raise FlowError('A proposed document share was not supported by an available, unshared source.')
         return {**value, 'citations': [{**c, **locations[c['page']]} for c in citations],
-                'calls': [metadata], 'prompt_version': 'ward-draft-workspace-en-3'}
+                'calls': [metadata], 'prompt_version': 'ward-draft-workspace-en-5'}
 
     def answer(self, documents, questions, progress):
         packet, locations = packet_for(documents)

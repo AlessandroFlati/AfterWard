@@ -163,6 +163,20 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(result['share_documents'], [])
         self.assertTrue(result['needs_clarification'])
 
+    def test_ward_draft_can_point_to_delivered_sheet_with_source(self):
+        docs = self.docs + [{'identifier': 'rehab', 'title': 'Exercises', 'fingerprint': 'r1',
+                            'delivered': True, 'pages': ['Exercise sheet.']}]
+        value = {'text': 'The exercise sheet is already available to you.',
+                 'needs_clarification': False, 'citations': [{'source_id': 'p2l1'}],
+                 'share_documents': []}
+        result = DischargeAI(ScriptedClient([value])).draft(docs,
+                     {'text': 'Please send the exercises.'}, lambda _: None)
+        self.assertEqual(result['share_documents'], [])
+        self.assertEqual(result['citations'][0]['document_id'], 'rehab')
+        with self.assertRaisesRegex(FlowError, 'unsupported factual reply'):
+            DischargeAI(ScriptedClient([{**value, 'citations': []}])).draft(docs,
+                         {'text': 'Please send the exercises.'}, lambda _: None)
+
 
 class BlockingAI:
     def __init__(self):
