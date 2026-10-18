@@ -389,11 +389,13 @@ class WorkspaceStore:
                     if len(documents) != 1:
                         raise FlowError('Select one document for an explanation.')
                     source = next(d for d in flow.view(actor)['documents'] if d['identifier'] == documents[0]['identifier'])
-                    clean['quote'] = bounded_text(payload.get('quote'), 5000)
-                    if source['text'].count(clean['quote']) != 1:
-                        raise FlowError('Select one exact, unique passage from the document.')
                     if 'question' in payload:
                         clean['question'] = bounded_text(payload['question'], 2000)
+                    clean['quote'] = None
+                    if 'quote' in payload or 'question' not in clean:
+                        clean['quote'] = bounded_text(payload.get('quote'), 5000)
+                        if source['text'].count(clean['quote']) != 1:
+                            raise FlowError('Select one exact, unique passage from the document.')
                 job = {'id': identifier, 'kind': kind, 'role': role, 'status': 'queued', 'stage': 'Waiting for the AMD worker',
                     'created_at_utc': datetime.now(timezone.utc).isoformat(), 'payload': clean,
                     'fingerprints': self._fingerprints(flow, role), 'question_generation': question['generation'] if question else None,

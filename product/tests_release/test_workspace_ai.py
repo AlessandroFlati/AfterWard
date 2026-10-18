@@ -81,6 +81,44 @@ class PipelineTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(FlowError):
                 validate_explanation(doc, doc.text, {**value, **change}, question='What does mg mean?')
 
+    def test_open_question_selects_its_source_from_the_full_document(self):
+        doc = Document('letter', 'team', 'patient', 'stay', '1',
+                       'Discharge letter\nParacetamol 500 mg.\nContinue outpatient follow-up.', True)
+        def answer(context):
+            self.assertNotIn('source_quote', context)
+            self.assertEqual(context['document_text'], doc.text)
+            return {'document_fingerprint': context['document_fingerprint'],
+                    'source_quote': 'Paracetamol 500 mg.', 'plain_language': 'mg means milligrams.',
+                    'needs_clarification': False, 'in_scope': True}
+        client = ScriptedClient([answer])
+        result = DischargeAI(client).explain(doc.__dict__, None, lambda _: None,
+                                            question='What does mg mean here?')
+        self.assertEqual(result['explanation']['source_quote'], 'Paracetamol 500 mg.')
+        self.assertEqual(client.calls[0][:2], ('document-question', 'none'))
+        self.assertEqual(result['prompt_version'], 'document-question-en-2')
+
+    def test_open_question_rejects_absent_or_ambiguous_automatic_sources(self):
+        doc = Document('letter', 'team', 'patient', 'stay', '1',
+                       'Paracetamol 500 mg.\nContinue follow-up.\nContinue follow-up.', True)
+        value = {'document_fingerprint': doc.fingerprint, 'source_quote': 'Paracetamol 500 mg.',
+                 'plain_language': 'mg means milligrams.', 'needs_clarification': False, 'in_scope': True}
+        for change in [{'source_quote': ''}, {'source_quote': None}, {'source_quote': 'Invented passage'},
+                       {'source_quote': 'Continue follow-up.'}, {'document_fingerprint': 'other'},
+                       {'plain_language': 'Take 900 mg.'}, {'plain_language': 'Paracetamol 500 mg'},
+                       {'in_scope': 'yes'}, {'needs_clarification': 'no'}]:
+            with self.subTest(change=change), self.assertRaises(FlowError):
+                validate_explanation(doc, None, {**value, **change}, question='What does mg mean?')
+
+    def test_open_question_allows_no_source_only_when_answer_is_withheld(self):
+        doc = Document('letter', 'team', 'patient', 'stay', '1', 'Paracetamol 500 mg.', True)
+        for in_scope, unclear in [(False, False), (True, True)]:
+            result = validate_explanation(doc, None, {'document_fingerprint': doc.fingerprint,
+                'source_quote': '', 'plain_language': 'Unsupported content must not be displayed.',
+                'needs_clarification': unclear, 'in_scope': in_scope}, question='A user question')
+            self.assertEqual(result['source_quote'], '')
+            self.assertEqual(result['plain_language'], '')
+            self.assertTrue(result['needs_clarification'])
+
     def test_document_question_withholds_unrelated_and_uncertain_answers(self):
         doc = Document('letter', 'team', 'patient', 'stay', '1', 'Paracetamol 500 mg.', True)
         for in_scope, unclear in [(False, False), (True, True)]:
@@ -321,27 +359,31 @@ class WorkspaceAITests(unittest.TestCase):
 
     def test_document_question_is_saved_with_answer_without_contacting_ward(self):
         def explanation(context):
-            return {**{k: context[k] for k in ('document_fingerprint', 'source_quote')},
+            self.assertNotIn('source_quote', context)
+            return {'document_fingerprint': context['document_fingerprint'],
+                    'source_quote': LETTER.splitlines()[0],
                     'plain_language': 'An outpatient clinic provides care without an overnight hospital stay.',
                     'needs_clarification': False, 'in_scope': True}
         client = ScriptedClient([explanation])
         self.store.ai = DischargeAI(client)
-        self.start(kind='explain', quote=LETTER.splitlines()[0], question='What is an outpatient clinic?')
+        self.start(kind='explain', question='What is an outpatient clinic?')
         self.assertEqual(self.finish()['status'], 'completed')
         reloaded = WorkspaceStore(self.store.path, local_ocr=False, precompute_glossary=False)
         state = reloaded.view(self.token, 'patient')
         self.assertEqual(state['questions'], [])
         self.assertEqual(state['explanations'][0]['question'], 'What is an outpatient clinic?')
         self.assertTrue(state['explanations'][0]['in_scope'])
+        self.assertEqual(state['explanations'][0]['source_quote'], LETTER.splitlines()[0])
         self.assertIn('overnight', state['explanations'][0]['plain_language'])
 
-    def test_document_question_requires_accessible_exact_extract_before_inference(self):
+    def test_document_question_requires_accessible_document_and_valid_input_before_inference(self):
         client = ScriptedClient([])
         self.store.ai = DischargeAI(client)
         for args in [{'quote': 'Not present in this letter', 'question': 'Explain this'},
                      {'quote': LETTER.splitlines()[0], 'question': ''},
                      {'quote': LETTER.splitlines()[0], 'question': 'x' * 2001},
-                     {'documents': ['rehab'], 'quote': 'A sheet', 'question': 'Explain this'}]:
+                     {'documents': ['rehab'], 'question': 'Explain this'},
+                     {'question': ''}, {'question': 'x' * 2001}, {}]:
             with self.subTest(args=args), self.assertRaises(FlowError):
                 self.start(kind='explain', **args)
         self.assertEqual(client.calls, [])

@@ -59,16 +59,23 @@ def validate_explanation(document, selected_quote, output, *, question=None):
         raise FlowError("Unexpected explanation schema.")
     if output["document_fingerprint"] != document.fingerprint:
         raise FlowError("The explanation belongs to a different document revision.")
-    quote = bounded_text(output["source_quote"], 5000)
-    if quote != bounded_text(selected_quote, 5000) or document.text.count(quote) != 1:
-        raise FlowError("The quoted passage is absent or ambiguous.")
     if type(output["needs_clarification"]) is not bool:
         raise FlowError("Clarification must be a boolean.")
+    if question is not None and type(output["in_scope"]) is not bool:
+        raise FlowError("Scope must be a boolean.")
+    withheld = output["needs_clarification"] or (question is not None and not output["in_scope"])
+    if question is not None and selected_quote is None and output["source_quote"] == "" and withheld:
+        quote = ""
+    else:
+        quote = bounded_text(output["source_quote"], 5000)
+        if document.text.count(quote) != 1:
+            raise FlowError("The quoted passage is absent or ambiguous.")
+    if (selected_quote is not None or question is None) and quote != bounded_text(selected_quote, 5000):
+        raise FlowError("The explanation changed the selected passage.")
     numbers = lambda text: re.findall(r"\d+(?:[.,:/-]\d+)*", text)
     if question is not None:
         if type(output["in_scope"]) is not bool or type(output["plain_language"]) is not str or len(output["plain_language"]) > 5000:
             raise FlowError("Invalid document-question response.")
-        withheld = output["needs_clarification"] or not output["in_scope"]
         plain = "" if withheld else bounded_text(output["plain_language"], 5000)
         if set(numbers(plain)) - set(numbers(document.text)):
             raise FlowError("The explanation introduced a number absent from the document.")
