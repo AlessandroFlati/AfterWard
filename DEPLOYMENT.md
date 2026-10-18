@@ -1,6 +1,6 @@
 # Railway deployment
 
-This deploys the English workspace and guided cases from this repository. It replaces the older demo interface only when you explicitly deploy this revision. Keep the existing service, domain, volume and workspace spending limits.
+This deploys the English workspace and guided cases from this repository. The existing public host now runs this workspace. Keep the existing service, domain, volume and workspace spending limits.
 
 ## Configuration
 
@@ -14,7 +14,7 @@ The deployment is one replica. It uses `/data/afterward-workspace/workspaces.sql
 | `AFTERWARD_DATA_DIR` | `/data/afterward-workspace` |
 | `AFTERWARD_PUBLIC_HOST` | `afterward-demo.up.railway.app` (hostname only) |
 | `PORT` | Let Railway inject it; configure the generated domain to target that port |
-| `AFTERWARD_AMD_ENABLED` | `1` for live OCR, document checks, explanations and reply drafts; `0` for workflow only |
+| `AFTERWARD_AMD_ENABLED` | `1` for live OCR, document checks, question prechecks, explanations and reply drafts; `0` for workflow only |
 | `AMD_TOKEN_FACTORY_API_KEY` | Existing secret, entered in Railway Variables; never put it in Git or a build argument |
 | `AFTERWARD_AMD_FREE_QUOTA_CONFIRMED` | `1` only while the free account entitlement is verified |
 | `AFTERWARD_API_EXPIRES` | Last intended demonstration date in UTC, for example `2026-10-25` for this event |
@@ -29,7 +29,9 @@ Railway [detects the Dockerfile](https://docs.railway.com/builds/dockerfiles). T
 
 ## Publish a clean revision
 
-The preferred source is the public GitHub repository. Select this repository in the service settings and deploy the intended commit. Clear any old start-command override; the correct command is `python -m carerelay.app`.
+The preferred source is the public GitHub repository. Select this repository in the service settings and deploy the intended commit. Verify the service's actual Start Command is `python -m carerelay.app`, with healthcheck path `/health` and timeout `60`. The first migration build succeeded but the existing service retained its old `carerelay.railway` override and failed at startup; correcting the service settings resolved that deployment failure. Do not infer runtime settings from a successful Docker build alone.
+
+This existing service uses legacy `railway.json` configuration. Railway currently documents that legacy config-as-code continues until December 1, 2026; a later infrastructure migration should follow the [current configuration documentation](https://docs.railway.com/config-as-code). No infrastructure migration is needed to redeploy this event's existing service.
 
 If using the already authenticated CLI instead:
 

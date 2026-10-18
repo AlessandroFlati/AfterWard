@@ -58,6 +58,10 @@ def handle_http(handler, store, base='', *, allowed_hosts):
         if route in ('/judge-guide', '/presentation') and handler.command in ('GET', 'HEAD'):
             respond(200, (WEB / (route[1:] + '.html')).read_bytes(), 'text/html; charset=utf-8')
             return True
+        if route == '/pitch.pdf' and handler.command in ('GET', 'HEAD'):
+            respond(200, (WEB / 'afterward-pitch.pdf').read_bytes(), 'application/pdf',
+                    extra={'Content-Disposition': 'inline; filename="AfterWard-pitch.pdf"'})
+            return True
         sample = re.fullmatch(r'/examples/(letter|rehab|appointment|discharge-scan)\.pdf', route)
         if sample and not store.personal and handler.command in ('GET', 'HEAD'):
             respond(200, (WEB.parent / 'assets/demo' / (sample[1] + '.pdf')).read_bytes(), 'application/pdf',

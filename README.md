@@ -8,7 +8,7 @@ Built for the [AMD Developer Hackathon Act III](https://lablab.ai/ai-hackathons/
 
 ## Try the product
 
-Run locally using the instructions below, then open <http://127.0.0.1:8776/judge-guide>. The app includes three guided cases with actions and expected outcomes:
+Open the [live demo](https://afterward-demo.up.railway.app/) and its [hands-on guide](https://afterward-demo.up.railway.app/judge-guide), or run locally using the instructions below. The app includes three guided entry routes with actions and expected outcomes:
 
 1. Ask about a missing rehabilitation sheet; share the existing document, send selected replies, continue a follow-up in the same thread and resolve it as the patient.
 2. Start from the ward, review the discharge bundle and explicitly deliver it without making the patient upload it again.
@@ -16,7 +16,7 @@ Run locally using the instructions below, then open <http://127.0.0.1:8776/judge
 
 Use **Connect another device** to join the same case from another browser. An invite works once and expires after ten minutes. Starting a new demo creates a separate case.
 
-The `/presentation` page contains the video walkthrough and a six-page outline for the PDF pitch. These are preparation materials, not a finished submission. The production URL still serving the earlier release must not be presented as this version until deployment is completed.
+The `/presentation` page contains the product narrative and video walkthrough. The public host runs this English workspace with live AMD inference and accepts only the packaged example PDFs. A recorded video and the final competition submission remain separate deliverables.
 
 ## Current scope
 
@@ -61,7 +61,7 @@ Set these environment variables before starting the app. `.env.example` document
 | Variable | Value / meaning |
 | --- | --- |
 | `AMD_TOKEN_FACTORY_API_KEY` | Server-side AMD token; never commit or expose it in the browser |
-| `AFTERWARD_AMD_ENABLED` | `1` to enable OCR and the three text tasks |
+| `AFTERWARD_AMD_ENABLED` | `1` to enable OCR and the four text tasks |
 | `AFTERWARD_AMD_FREE_QUOTA_CONFIRMED` | `1` after verifying the account's free entitlement |
 | `AFTERWARD_API_EXPIRES` | Explicit final UTC date, `YYYY-MM-DD` |
 | `AFTERWARD_API_TOTAL_LIMIT` | Total attempts for this deployment; default `200` |
@@ -85,7 +85,7 @@ Browser (English, dark theme)
 - `discharge_service.py`: durable sessions, one-use invites, document visibility and intake assets.
 - `discharge_http.py`: bounded same-origin HTTP adapter, fixed static routes and `/health`.
 - `gemma_ocr.py`: fixed AMD provider, response validation and shared quota accounting.
-- `discharge_ai.py`, `document_checks.py`, `assets/prompts/`: production adaptation of the v7 two-pass checks, exact source resolution, conditional conflict comparison, explanations and optional reply drafting.
+- `discharge_ai.py`, `document_checks.py`, `assets/prompts/`: product adaptation of the v7 two-pass checks, exact source resolution, conditional conflict comparison, explanations, patient question prechecks and optional reply drafting.
 - `app.py`: portable launcher and persistent deployment configuration.
 - `foundation/`, `handoff.py`, `evidence.py`, `documents.py`: scoped FHIR/evidence foundations and local extraction.
 - `web/`, `assets/demo/`: self-hosted interface, judge guide, presentation walkthrough and invented PDFs.

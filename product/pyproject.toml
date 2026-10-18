@@ -27,4 +27,4 @@ afterward = "carerelay.app:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-carerelay = ["web/discharge.html", "web/discharge.css", "web/discharge.js", "web/judge-guide.html", "web/presentation.html", "web/*.woff2", "web/*.license.txt", "assets/demo/*.pdf", "assets/prompts/*.txt"]
+carerelay = ["web/discharge.html", "web/discharge.css", "web/discharge.js", "web/judge-guide.html", "web/presentation.html", "web/afterward-pitch.pdf", "web/*.woff2", "web/*.license.txt", "assets/demo/*.pdf", "assets/prompts/*.txt"]

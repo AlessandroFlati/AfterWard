@@ -53,6 +53,7 @@
 !product/src/carerelay/web/font-plex.woff2
 !product/src/carerelay/web/judge-guide.html
 !product/src/carerelay/web/presentation.html
+!product/src/carerelay/web/afterward-pitch.pdf
 !product/tests_release/test_release.py
 !product/tests_release/test_workspace_ai.py
 !railway.json
