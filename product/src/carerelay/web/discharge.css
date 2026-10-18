@@ -11,6 +11,7 @@ a{color:var(--accent);text-underline-offset:4px}button,input,textarea,select{fon
 .guide{max-width:1080px;margin:0 auto;padding:48px 28px 80px}.guide h1{font:500 48px/1.15 Fraunces,serif}.guide>.card{margin:32px 0;scroll-margin-top:24px}.guide li{padding:7px 0 7px 8px}.guide blockquote{margin:12px 0;padding:16px 20px;border-left:3px solid var(--accent);background:var(--deep)}.expected{border-top:1px solid var(--line);margin-top:24px;padding-top:12px}.guide .actions{flex-wrap:wrap}
 .brand-block{min-width:0}.mobile-menu,.mobile-context{display:none}
 .appbar nav .nav-actions{display:none}.nav-count{color:var(--accent);font-weight:700}
+.nav-short-label{display:none}
 body:has(dialog[open]){overflow:hidden}
 main,.row>* ,.pdf-columns>* ,.two>*{min-width:0}
 button,.button{max-width:100%;white-space:normal;overflow-wrap:anywhere;text-align:center}
@@ -68,6 +69,7 @@ h1,h2,h3,.breadcrumbs,.check,.ai-progress,.ai-suggestion{overflow-wrap:anywhere}
   .appbar nav{position:fixed;bottom:0;left:0;right:0;display:grid;grid-auto-flow:column;grid-auto-columns:minmax(0,1fr);gap:4px;padding:6px 8px;padding-bottom:max(6px,env(safe-area-inset-bottom));background:var(--panel);border-top:1px solid var(--line);box-shadow:0 -4px 18px #0003}
   .appbar nav a{display:flex;align-items:center;justify-content:center;text-align:center;min-height:48px;padding:6px 4px;font-size:14px;line-height:1.2;overflow-wrap:anywhere}
   .appbar nav .nav-actions{display:flex;gap:4px}#activity-shortcut{display:none}
+  .appbar nav .nav-short-label{display:inline}.appbar nav .nav-full-label{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
   .collaboration-bar{gap:4px 12px;padding:10px 16px;font-size:12px;overflow-wrap:anywhere}
   .collaboration-bar a{min-height:32px;display:inline-flex;align-items:center}
   .patient-shell,.workspace{padding:24px 16px calc(90px + env(safe-area-inset-bottom));scroll-margin-top:92px}

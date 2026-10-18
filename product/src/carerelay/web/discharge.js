@@ -83,7 +83,7 @@ function landing() {
     <section class="card"><h2>The patient brings a PDF</h2><p>Read a scanned letter with Gemma, compare it with the original and check the reviewed text.</p><button data-start="patient">Start with a PDF</button></section></div>
     <p><a href="${url('patient')}">Resume patient view</a> · <a href="${url('staff')}">Resume ward view</a></p></main>`;
 }
-const navLink=(hash,text,active)=>`<a href="#${hash}" ${active?'aria-current="page"':''}>${text}</a>`;
+const navLink=(hash,text,active)=>`<a href="#${hash}" ${active?'aria-current="page"':''}>${hash==='documents'?'<span class="nav-full-label">Documents</span><span class="nav-short-label" aria-hidden="true">Docs</span>':text}</a>`;
 function actionItems() {
   if(role!=='staff'||!state)return [];
   const questions=staffQuestions().filter(waiting).map(q=>({href:'thread-'+q.id,title:q.text,
