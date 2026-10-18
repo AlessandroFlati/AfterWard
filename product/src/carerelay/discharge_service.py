@@ -18,6 +18,7 @@ import uuid
 
 from .discharge_flow import Actor, Document, DischargeFlow, FlowError, bounded_text
 from .discharge_ai import GLOSSARY_VERSION, GLOSSARY_MODEL
+from .api_protocol import trace_task
 
 TITLES = {'letter': 'Discharge letter', 'rehab': 'Rehabilitation programme',
           'appointment': 'Follow-up appointment reminder', 'personal-sheet': 'Hand-delivered sheet'}
@@ -286,11 +287,12 @@ class WorkspaceStore:
                     self.glossary_running = False
                     return
                 key, text, created = self.glossary_queue.popleft()
+            identifier = uuid.uuid4().hex
             started = None
             error_type = None
             validation_error = None
             try:
-                with self.ai_slot:
+                with self.ai_slot, trace_task(identifier):
                     started = datetime.now(timezone.utc)
                     with closing(sqlite3.connect(self.path, timeout=10)) as db, db:
                         db.execute('UPDATE glossary_cache SET status=?,updated_at_utc=? WHERE cache_key=?',
@@ -309,6 +311,7 @@ class WorkspaceStore:
                     db.execute('UPDATE glossary_cache SET status=?,updated_at_utc=?,record=? WHERE cache_key=?',
                         (status, finished.isoformat(), json.dumps(output), key))
                 print(json.dumps({'event': 'ai_task', 'at_utc': finished.isoformat(), 'kind': 'clinical-glossary',
+                    'task_id': identifier,
                     'status': status, 'error_type': error_type, 'validation_error': validation_error,
                     'queue_seconds': round((started-datetime.fromisoformat(created)).total_seconds(), 2) if started else None,
                     'processing_seconds': round((finished-started).total_seconds(), 2) if started else None}), flush=True)
@@ -448,7 +451,7 @@ class WorkspaceStore:
                 raise FlowError(error)
             return job
         try:
-            with self.ai_slot:
+            with self.ai_slot, trace_task(identifier):
                 job = save(stage='Starting the check')
                 if job['kind'] == 'analyze':
                     result = self.ai.analyze(documents, lambda text: save(stage=text))

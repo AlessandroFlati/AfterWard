@@ -24,6 +24,7 @@
 !/product/pyproject.toml
 !/product/requirements-hosted.txt
 !/product/scripts/build_workspace_pdfs.py
+!/product/scripts/measure_railway_latency.py
 !/product/src/carerelay/__init__.py
 !/product/src/carerelay/__main__.py
 !/product/src/carerelay/api_protocol.py

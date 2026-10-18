@@ -16,7 +16,7 @@ from urllib.request import Request, build_opener
 import uuid
 
 from .documents import DocumentError
-from .api_protocol import _NoRedirect, InferenceError, strict_json
+from .api_protocol import _NoRedirect, _TimedHTTPSHandler, TASK_ID, InferenceError, strict_json
 
 BASE = 'https://developer.amd.com.cn/radeon/api/v1'
 MODEL = 'Gemma-4-31B-IT'
@@ -48,17 +48,42 @@ class GemmaOCR:
         self.expires = datetime.strptime(expires, '%Y-%m-%d').date()
         self.retry_at = 0
 
-    def _request(self, path, payload=None, *, timeout=85):
+    def _request(self, path, payload=None, *, timeout=85, telemetry=None):
         started = time.perf_counter()
+        started_at = datetime.now(timezone.utc).isoformat()
         outcome, status, retry_after, limit_code = 'failed', None, None, None
-        request = Request(BASE + path, data=json.dumps(payload).encode() if payload else None,
+        timings = {'phase': 'prepare'}
+        provider_ids = {}
+        data = json.dumps(payload).encode() if payload else None
+        request = Request(BASE + path, data=data,
             headers={'Authorization': 'Bearer ' + self.key, 'Content-Type': 'application/json'})
+
+        def read_response(response, limit):
+            for name in ('x-request-id', 'request-id', 'x-correlation-id', 'cf-ray'):
+                value = response.headers.get(name, '') if response.headers else ''
+                if isinstance(value, str) and re.fullmatch(r'(?:[a-fA-F0-9-]{16,64}|[a-f0-9]{16}-[A-Z]{3})', value):
+                    provider_ids[name] = value
+            timings['phase'] = 'response_body'
+            body_started = time.perf_counter()
+            try:
+                raw = response.read(limit)
+                timings['response_bytes'] = len(raw)
+                return raw
+            finally:
+                timings['body_read_seconds'] = time.perf_counter() - body_started
+
         try:
-            with build_opener(_NoRedirect()).open(request, timeout=timeout if payload else 15) as response:
-                raw = response.read(256001)
+            with build_opener(_NoRedirect(), _TimedHTTPSHandler(timings)).open(
+                    request, timeout=timeout if payload else 15) as response:
+                status = response.status
+                raw = read_response(response, 256001)
             if len(raw) > 256000:
                 raise ValueError('Response limit')
+            timings['phase'] = 'json_parse'
+            parse_started = time.perf_counter()
             value = strict_json(raw)
+            timings['parse_seconds'] = time.perf_counter() - parse_started
+            timings['phase'] = 'complete'
             outcome = 'completed'
             return value
         except HTTPError as exc:
@@ -76,7 +101,7 @@ class GemmaOCR:
                 if not math.isfinite(retry_after) or retry_after < 0:
                     retry_after = 60
                 try:
-                    body = strict_json(exc.read(8193))
+                    body = strict_json(read_response(exc, 8193))
                     error = body.get('error') or (body.get('detail') or {}).get('error')
                     code = error.get('code') if isinstance(error, dict) else None
                     allowed = {'token_rate_limit_exceeded', 'ip_rate_limit_exceeded',
@@ -94,17 +119,29 @@ class GemmaOCR:
         except TimeoutError:
             outcome = 'timeout'
             raise DocumentError('AMD did not finish within the request timeout. Your documents remain available. You can retry.') from None
-        except (URLError, OSError, HTTPException, ValueError, InferenceError):
+        except URLError as exc:
+            outcome = 'timeout' if isinstance(exc.reason, TimeoutError) else 'connection_error'
+            raise DocumentError('AMD did not finish within the request timeout. Your documents remain available. You can retry.'
+                if outcome == 'timeout' else 'AMD could not be reached. Your documents remain available. You can retry.') from None
+        except (OSError, HTTPException, ValueError, InferenceError):
             raise DocumentError('AMD could not complete this request. Your documents remain available. You can retry; no local inference is started.') from None
         finally:
-            print(json.dumps({'event': 'amd_request', 'at_utc': datetime.now(timezone.utc).isoformat(),
+            record = {'event': 'amd_request', 'at_utc': datetime.now(timezone.utc).isoformat(),
+                'started_at_utc': started_at, 'task_id': TASK_ID.get(),
+                'attempt_id': (telemetry or {}).get('attempt_id'), 'stage': (telemetry or {}).get('stage'),
                 'operation': 'inference' if payload else 'quota', 'status': outcome,
-                'http_status': status, 'seconds': round(time.perf_counter()-started, 2),
+                'http_status': status, 'seconds': round(time.perf_counter()-started, 4),
+                'request_bytes': len(data) if data else 0,
                 'timeout_seconds': timeout if payload else 15,
-                'retry_after_seconds': retry_after, 'limit_code': limit_code}), flush=True)
+                'retry_after_seconds': retry_after, 'limit_code': limit_code,
+                'provider_ids': provider_ids,
+                **{k: round(v, 4) if isinstance(v, float) else v for k, v in timings.items()}}
+            if telemetry is not None:
+                telemetry.setdefault('requests', []).append(record)
+            print(json.dumps(record), flush=True)
 
     @contextmanager
-    def _attempt(self, subject='workspace-gemma-ocr'):
+    def _attempt(self, subject='workspace-gemma-ocr', *, telemetry=None):
         """Use the existing shared ledger; never extend or reset its allocation."""
         if time.time() < self.retry_at:
             raise BusyServiceError(self.retry_at)
@@ -112,6 +149,9 @@ class GemmaOCR:
             raise DocumentError('AMD quota ledger unavailable.')
         now = datetime.now(timezone.utc)
         identifier = uuid.uuid4().hex
+        telemetry = telemetry if telemetry is not None else {}
+        telemetry['attempt_id'] = identifier
+        ledger_started = time.perf_counter()
         with closing(sqlite3.connect(self.budget_path, timeout=10)) as db, db:
             db.execute('BEGIN IMMEDIATE')
             total, public, frozen = db.execute('SELECT total_maximum,public_maximum,frozen FROM campaign_policy').fetchone()
@@ -130,10 +170,14 @@ class GemmaOCR:
                 raise DocumentError('Another AMD request is in progress. Wait and try again.')
             # Claim before waiting, so another worker cannot race the quota check.
             db.execute('UPDATE inference_lease SET active_id=? WHERE singleton=1', (identifier,))
+        telemetry['ledger_seconds'] = time.perf_counter() - ledger_started
+        outcome = 'failed'
         try:
+            pace_started = time.perf_counter()
             if last:
                 time.sleep(max(0, min(6.2, 6.2 - (now - datetime.fromisoformat(last)).total_seconds())))
-            quota = self._request('/usage?include_recent=false')
+            telemetry['pacing_seconds'] = time.perf_counter() - pace_started
+            quota = self._request('/usage?include_recent=false', telemetry=telemetry)
             if type(quota) is not dict:
                 raise DocumentError('Cannot verify free AMD quota. No page was sent.')
             remaining, limit = quota.get('daily_cost_remaining_usd'), quota.get('daily_cost_limit_usd')
@@ -141,30 +185,51 @@ class GemmaOCR:
                     or limit <= 0 or remaining <= .05):
                 raise DocumentError('Free AMD quota cannot be verified or its reserve was reached. No page was sent.')
             now = datetime.now(timezone.utc)
+            ledger_started = time.perf_counter()
             with closing(sqlite3.connect(self.budget_path, timeout=10)) as db, db:
                 db.execute('INSERT INTO inference_attempts VALUES (?,?,?)', (identifier, now.date().isoformat(), now.isoformat()))
                 db.execute('INSERT INTO attempt_context VALUES (?,?,?)', (identifier, self.purpose, subject))
                 db.execute('UPDATE inference_lease SET last_started=? WHERE active_id=?', (now.isoformat(), identifier))
+            telemetry['ledger_seconds'] += time.perf_counter() - ledger_started
             yield identifier
+            outcome = 'completed'
         finally:
+            ledger_started = time.perf_counter()
             with closing(sqlite3.connect(self.budget_path, timeout=10)) as db, db:
                 db.execute('UPDATE inference_lease SET active_id=NULL WHERE active_id=?', (identifier,))
+            telemetry['ledger_seconds'] += time.perf_counter() - ledger_started
+            print(json.dumps({'event': 'amd_attempt', 'at_utc': datetime.now(timezone.utc).isoformat(),
+                'task_id': TASK_ID.get(), 'attempt_id': identifier, 'stage': telemetry.get('stage'),
+                'status': outcome, 'ledger_seconds': round(telemetry['ledger_seconds'], 4),
+                'pacing_seconds': round(telemetry.get('pacing_seconds', 0), 4)}), flush=True)
+
+    @staticmethod
+    def _timing_summary(telemetry):
+        result = {k: round(telemetry.get(k, 0), 4) for k in ('ledger_seconds', 'pacing_seconds')}
+        for request in telemetry.get('requests', []):
+            result[request['operation'] + '_seconds'] = request['seconds']
+            if request['operation'] == 'inference':
+                result.update({k: v for k, v in request.items() if k.endswith('_seconds')
+                               and k not in ('timeout_seconds', 'retry_after_seconds')})
+        return result
 
     def chat(self, prompt, context, *, effort, stage):
         """Bounded JSON completion; all features use the same free-quota ledger."""
         if effort not in ('none', 'medium'):
             raise ValueError('Unsupported reasoning effort.')
         started = time.perf_counter()
+        telemetry = {'stage': stage}
         payload = {'model': MODEL, 'stream': False, 'reasoning_effort': effort, 'temperature': 0,
             'max_tokens': 8192, 'response_format': {'type': 'json_object'},
             'messages': [{'role': 'system', 'content': prompt},
                          {'role': 'user', 'content': json.dumps(context, ensure_ascii=False)}]}
-        with self._attempt('workspace-' + stage) as identifier:
+        with self._attempt('workspace-' + stage, telemetry=telemetry) as identifier:
             response = self._request('/chat/completions', payload,
-                timeout=300 if stage == 'clinical-glossary' else 180)
+                timeout=300 if stage == 'clinical-glossary' else 180, telemetry=telemetry)
         metadata = {'model': MODEL, 'provider': 'amd_api', 'reasoning_effort': effort,
             'stage': stage, 'attempt_id': identifier, 'at_utc': datetime.now(timezone.utc).isoformat(),
             'elapsed_seconds': round(time.perf_counter()-started, 2),
+            'timings': self._timing_summary(telemetry),
             'usage': {k: v for k, v in (response.get('usage') or {}).items()
                       if k in ('prompt_tokens','completion_tokens','total_tokens') and type(v) is int}}
         try:
@@ -182,13 +247,14 @@ class GemmaOCR:
         if not isinstance(image, bytes) or not image.startswith(b'\x89PNG') or len(image) > 16 * 1024 * 1024:
             raise DocumentError('Invalid page image.')
         started = time.perf_counter()
+        telemetry = {'stage': 'ocr'}
         payload = {'model': MODEL, 'stream': False, 'reasoning_effort': 'none', 'temperature': 0,
             'max_tokens': 8192, 'response_format': {'type': 'json_object'},
             'messages': [{'role': 'system', 'content': PROMPT}, {'role': 'user', 'content': [
                 {'type': 'text', 'text': 'Transcribe this page faithfully.'},
                 {'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,' + base64.b64encode(image).decode('ascii')}}]}]}
-        with self._attempt() as identifier:
-            response = self._request('/chat/completions', payload)
+        with self._attempt(telemetry=telemetry) as identifier:
+            response = self._request('/chat/completions', payload, telemetry=telemetry)
         try:
             choice = response['choices'][0]
             if response.get('model') not in (MODEL, 'self-dploy/' + MODEL) or choice['finish_reason'] != 'stop' or choice['message'].get('tool_calls'):
@@ -206,6 +272,7 @@ class GemmaOCR:
         return {'text': value['text'], 'model': MODEL, 'served_model':response['model'], 'provider': 'amd_api', 'prompt_version': PROMPT_VERSION,
             'thinking': False, 'reasoning_effort': 'none', 'at_utc': datetime.now(timezone.utc).isoformat(),
             'elapsed_seconds': round(time.perf_counter()-started, 2), 'attempt_id': identifier,
+            'timings': self._timing_summary(telemetry),
             'usage': {k: v for k, v in usage.items() if k in ('prompt_tokens','completion_tokens','total_tokens') and type(v) is int},
             'numbers_only_in_current': list((original-current).elements()),
             'numbers_only_in_gemma': list((current-original).elements())}

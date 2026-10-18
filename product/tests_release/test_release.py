@@ -20,6 +20,7 @@ from carerelay.discharge_service import WorkspaceStore
 from carerelay.documents import DocumentError
 from carerelay.gemma_ocr import GemmaOCR, MODEL
 from carerelay.local_pdf import extract_local_pdf
+from carerelay.api_protocol import TASK_ID, trace_task, _TimedHTTPSConnection
 
 ASSETS = Path(__file__).resolve().parents[1] / 'src/carerelay/assets/demo'
 
@@ -184,6 +185,75 @@ class QuotaTests(unittest.TestCase):
         self.assertNotIn('private text',str(record))
         self.assertNotIn('test-key',str(record))
         self.assertNotIn('sensitive',str(record))
+
+    def test_request_timings_correlate_without_logging_body_or_headers(self):
+        class Response(BytesIO):
+            status = 200
+            headers = {'x-request-id': '12345678-1234-1234-1234-123456789012',
+                       'x-correlation-id': 'private patient name', 'set-cookie': 'secret'}
+        telemetry = {'stage': 'patient-answer-check', 'attempt_id': 'attempt'}
+        with trace_task('task'), patch('carerelay.gemma_ocr.build_opener') as opener, patch('builtins.print') as emitted:
+            opener.return_value.open.return_value = Response(b'{"value":"private response"}')
+            self.client._request('/chat/completions', {'source': 'private document'}, telemetry=telemetry)
+        record = json.loads(emitted.call_args.args[0])
+        self.assertEqual((record['task_id'], record['attempt_id']), ('task', 'attempt'))
+        self.assertEqual(record['http_status'], 200)
+        self.assertEqual(record['phase'], 'complete')
+        self.assertGreater(record['response_bytes'], 0)
+        self.assertGreaterEqual(record['body_read_seconds'], 0)
+        self.assertEqual(set(record['provider_ids']), {'x-request-id'})
+        self.assertEqual(telemetry['requests'], [record])
+        self.assertNotIn('private', json.dumps(record))
+        self.assertNotIn('secret', json.dumps(record))
+        self.assertNotIn('test-key', json.dumps(record))
+        self.assertIsNone(TASK_ID.get())
+
+    def test_connection_timeout_wrapped_by_urllib_remains_a_timeout(self):
+        from urllib.error import URLError
+        with patch('carerelay.gemma_ocr.build_opener') as opener, patch('builtins.print') as emitted:
+            opener.return_value.open.side_effect = URLError(TimeoutError('sensitive detail'))
+            with self.assertRaisesRegex(DocumentError, 'request timeout'):
+                self.client._request('/usage?include_recent=false')
+        self.assertEqual(json.loads(emitted.call_args.args[0])['status'], 'timeout')
+
+    def test_transport_separates_connection_send_and_headers_without_disabling_tls(self):
+        import ssl
+        clock = [0.0]
+        timings = {}
+
+        def tcp(*args, **kwargs):
+            clock[0] += 2
+            return object()
+
+        def connect(connection):
+            connection.sock = connection._create_connection(('example.invalid', 443))
+            clock[0] += 3
+
+        def send(connection, data):
+            if connection.sock is None:
+                connection.connect()
+            clock[0] += .5
+
+        def headers(connection):
+            clock[0] += 40
+            raise TimeoutError()
+
+        with patch('socket.create_connection', side_effect=tcp), patch('carerelay.api_protocol.time.perf_counter', side_effect=lambda: clock[0]), \
+                patch('http.client.HTTPSConnection.connect', connect), patch('http.client.HTTPSConnection.send', send), \
+                patch('http.client.HTTPSConnection.getresponse', headers):
+            connection = _TimedHTTPSConnection('example.invalid', timings=timings)
+            self.assertTrue(connection._context.check_hostname)
+            self.assertEqual(connection._context.verify_mode, ssl.CERT_REQUIRED)
+            connection.send(b'private content')
+            with self.assertRaises(TimeoutError):
+                connection.getresponse()
+        self.assertEqual(timings['dns_tcp_seconds'], 2)
+        self.assertEqual(timings['tls_tunnel_seconds'], 3)
+        self.assertEqual(timings['connection_seconds'], 5)
+        self.assertEqual(timings['send_seconds'], .5)
+        self.assertEqual(timings['response_headers_seconds'], 40)
+        self.assertEqual(timings['phase'], 'response_headers')
+        self.assertNotIn('private', json.dumps(timings))
 
     def test_busy_response_keeps_retry_delay_and_blocks_early_retries(self):
         from io import BytesIO

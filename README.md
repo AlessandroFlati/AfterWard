@@ -77,6 +77,10 @@ Each attempt, including background preparation and failed inference, counts. Req
 
 HTTP 429 responses retain a whitelisted limiter code and the provider's Retry-After delay in diagnostic logs, without response bodies. The running client blocks further attempts until that delay expires; this cooldown is in memory. Failed jobs retain their retry time so reply editors can show a countdown and an explicit retry button. No automatic inference retry is made.
 
+Latency logs correlate `ai_task`, `amd_attempt` and `amd_request` through task/attempt IDs. They separate app queueing, ledger access, pacing, quota checks, DNS/TCP connection, TLS/proxy tunnel, sending, waiting for complete response headers, response body reading and JSON parsing. Connection time contains DNS/TCP and TLS/tunnel time; do not add the parent and child measurements together. Header wait is not time to first generated token: non-streaming requests cannot distinguish upstream queueing from generation or network delay. Logs retain numeric sizes/timings and allowlisted opaque request IDs, never source text, prompts, output bodies or credentials. Certificate verification and redirect rejection remain enabled.
+
+To repeat the same medium Case 1 checks through the deployed application's normal session and queue, run `python product/scripts/measure_railway_latency.py --samples 8 --output build/railway-latency.json`. Use the existing Python environment and a new output path for each series. This makes counted live calls within existing free-quota controls, runs serially, and stops on the first failure without retrying it. The JSON report retains every attempt, token counts and server timings, plus client observation time with three-second polling. It reports minimum/median/maximum for successful requests separately from failure counts; a small series does not estimate a reliable p95. Cookies stay in memory. Keep measured reports private and out of the public source archive.
+
 ## Architecture
 
 ```text
