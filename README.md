@@ -28,7 +28,7 @@ The `/presentation` page contains the product narrative and video walkthrough. T
 | Per-question reminders and selected batch replies | Implemented |
 | Explicit document delivery and patient-controlled resolution | Implemented |
 | Shared case across browsers/devices | Implemented with demo identities |
-| Automatic gap detection, plain-language explanations, ward AI drafting | Connected: medium document checks and ward drafting; none explanations with staff review before publication |
+| Automatic gap detection, plain-language explanations, ward AI drafting | Connected: medium document checks, cached clinical glossary and ward drafting; explanations appear directly as AI-generated |
 | Patient question check before contacting the ward | Connected: medium reasoning over patient-visible documents, exact source excerpts, explicit selection before sending; the patient can bypass the check |
 | FHIR input | Bounded library/CLI foundation; no live hospital connector |
 | Verified hospital identity, real delegation, external notifications | Not implemented |
@@ -61,15 +61,17 @@ Set these environment variables before starting the app. `.env.example` document
 | Variable | Value / meaning |
 | --- | --- |
 | `AMD_TOKEN_FACTORY_API_KEY` | Server-side AMD token; never commit or expose it in the browser |
-| `AFTERWARD_AMD_ENABLED` | `1` to enable OCR and the four text tasks |
+| `AFTERWARD_AMD_ENABLED` | `1` to enable OCR, text tasks and background clinical explanations |
 | `AFTERWARD_AMD_FREE_QUOTA_CONFIRMED` | `1` after verifying the account's free entitlement |
 | `AFTERWARD_API_EXPIRES` | Explicit final UTC date, `YYYY-MM-DD` |
 | `AFTERWARD_API_TOTAL_LIMIT` | Total attempts for this deployment; default `200` |
 | `AFTERWARD_API_DAILY_LIMIT` | Attempts per UTC day; default `100` |
 
-The fixed endpoint is `https://developer.amd.com.cn/radeon/api/v1`; model `Gemma-4-31B-IT`. The browser sends PDF bytes to this server. The server renders pages locally, checks `/usage`, reserves an attempt in SQLite, then sends a PNG to AMD. OCR uses `reasoning_effort=none`, temperature `0`, a bounded JSON response and no automatic retry. Document checking uses medium reasoning: facts, findings with a contrary-fact audit, and a conditional conflict pass. At most one completed schema-invalid response is corrected. Ward drafts use medium; explanations use none and remain private until staff review. Text tasks run asynchronously, with source-revision invalidation and explicit failures. Each check accepts up to five selected pages and 60,000 characters.
+The fixed endpoint is `https://developer.amd.com.cn/radeon/api/v1`; model `Gemma-4-31B-IT`. The browser sends PDF bytes to this server. The server renders pages locally, checks `/usage`, reserves an attempt in SQLite, then sends a PNG to AMD. OCR uses `reasoning_effort=none`, temperature `0`, a bounded JSON response and no automatic retry. Document checking uses medium reasoning: facts, findings with a contrary-fact audit, and a conditional conflict pass. At most one completed schema-invalid response is corrected. Ward drafts use medium. Custom-passage explanations use none and appear directly beside the source as AI-generated; staff review is optional. When the model flags insufficient context, its explanation is withheld and the patient can explicitly prepare and send a clarification question. Text tasks run asynchronously, with source-revision invalidation and explicit failures. Each check accepts up to five selected pages and 60,000 characters. Structured runtime logs separate application queue time, quota requests and inference requests without logging document text or credentials.
 
-Each attempt, including failed inference, counts. Requests are serialized and spaced. The client preserves the final $0.05-equivalent daily quota allocation reported by AMD; the API's quota units are not evidence of a paid retail price. Changing environment limits does not reset or silently expand a persisted ledger. A leftover lease after an interrupted process blocks further inference until an operator verifies that no request is active and clears only that lease.
+Clinical wording is selected and explained with medium reasoning in the background after the last OCR page, before transcription confirmation. Existing documents are prepared when their case is opened. A shared SQLite cache on the persistent server volume keys results by exact document text, model, effort and prompt version. Identical documents across sessions reuse one pending or completed task; corrected text and prompt changes create a new key. Opening a prepared term makes no inference request. Cache reads follow document visibility: a patient cannot access an undelivered ward document's explanation. Failed tasks require an explicit retry; interrupted tasks resume on access. The non-sensitive demo glossary cache is retained for up to seven days and pruned at service startup; personal local mode never uses this cache or the AMD API. Definitions are source-bound AI output, not clinical validation. A separate custom-passage action uses none reasoning and remains available when the precomputed selection does not cover a concern.
+
+Each attempt, including background preparation and failed inference, counts. Requests are serialized and spaced. The client preserves the final $0.05-equivalent daily quota allocation reported by AMD; the API's quota units are not evidence of a paid retail price. Changing environment limits does not reset or silently expand a persisted ledger. A leftover lease after an interrupted process blocks further inference until an operator verifies that no request is active and clears only that lease.
 
 ## Architecture
 

@@ -41,6 +41,8 @@ class GemmaOCR:
         self.expires = datetime.strptime(expires, '%Y-%m-%d').date()
 
     def _request(self, path, payload=None, *, timeout=85):
+        started = time.perf_counter()
+        outcome, status = 'failed', None
         request = Request(BASE + path, data=json.dumps(payload).encode() if payload else None,
             headers={'Authorization': 'Bearer ' + self.key, 'Content-Type': 'application/json'})
         try:
@@ -48,13 +50,24 @@ class GemmaOCR:
                 raw = response.read(256001)
             if len(raw) > 256000:
                 raise ValueError('Response limit')
-            return strict_json(raw)
+            value = strict_json(raw)
+            outcome = 'completed'
+            return value
         except HTTPError as exc:
             status = exc.code
+            outcome = 'http_error'
             exc.close()
             raise DocumentError(f'AMD could not complete this request (HTTP {status}). Your documents remain available. You can retry.') from None
+        except TimeoutError:
+            outcome = 'timeout'
+            raise DocumentError('AMD did not finish within the request timeout. Your documents remain available. You can retry.') from None
         except (URLError, OSError, HTTPException, ValueError, InferenceError):
             raise DocumentError('AMD could not complete this request. Your documents remain available. You can retry; no local inference is started.') from None
+        finally:
+            print(json.dumps({'event': 'amd_request', 'at_utc': datetime.now(timezone.utc).isoformat(),
+                'operation': 'inference' if payload else 'quota', 'status': outcome,
+                'http_status': status, 'seconds': round(time.perf_counter()-started, 2),
+                'timeout_seconds': timeout if payload else 15}), flush=True)
 
     @contextmanager
     def _attempt(self, subject='workspace-gemma-ocr'):
@@ -111,7 +124,8 @@ class GemmaOCR:
             'messages': [{'role': 'system', 'content': prompt},
                          {'role': 'user', 'content': json.dumps(context, ensure_ascii=False)}]}
         with self._attempt('workspace-' + stage) as identifier:
-            response = self._request('/chat/completions', payload, timeout=180)
+            response = self._request('/chat/completions', payload,
+                timeout=300 if stage == 'clinical-glossary' else 180)
         metadata = {'model': MODEL, 'provider': 'amd_api', 'reasoning_effort': effort,
             'stage': stage, 'attempt_id': identifier, 'at_utc': datetime.now(timezone.utc).isoformat(),
             'elapsed_seconds': round(time.perf_counter()-started, 2),

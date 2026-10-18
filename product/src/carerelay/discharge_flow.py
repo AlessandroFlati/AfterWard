@@ -69,7 +69,7 @@ def validate_explanation(document, selected_quote, output):
     if negation(quote) != negation(plain):
         raise FlowError("Negation markers changed; manual rewriting is required.")
     return {**deepcopy(output), "source_quote": quote, "plain_language": plain,
-            "semantic_validation": "human_review_required"}
+            "semantic_validation": "not_clinically_validated"}
 
 
 class DischargeFlow:
@@ -349,8 +349,12 @@ class DischargeFlow:
             visible = dict(self.documents) if staff else dict(self.delivered)
             if not staff:
                 visible.update({k: v for k, v in self.documents.items() if k in self.personal_documents})
-            explanations = [deepcopy(e) for e in self.explanations.values() if staff or
-                e["approved"] and e["document_id"] in visible and visible[e["document_id"]].fingerprint == e["document_fingerprint"]]
+            explanations = [deepcopy(e) for e in self.explanations.values() if
+                e["document_id"] in visible and visible[e["document_id"]].fingerprint == e["document_fingerprint"]]
+            if not staff:
+                for explanation in explanations:
+                    if explanation["needs_clarification"]:
+                        explanation["plain_language"] = ""
             pending = [key for key, q in self.questions.items() if q["status"] in {"open", "needs_review"}]
             now = datetime.now(timezone.utc)
             reminder_options = []

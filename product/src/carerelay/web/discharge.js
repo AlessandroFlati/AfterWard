@@ -3,7 +3,7 @@ const app = document.querySelector('#app');
 const path = location.pathname.replace(/\/$/, '');
 const role = path.endsWith('/staff') ? 'staff' : path.endsWith('/patient') ? 'patient' : null;
 const base = role ? path.replace(/\/(staff|patient)$/, '') : path;
-let state = null, config = null, busy = false, drafts = {}, inviteLink = '', activeRead = null, mobileMenuOpen = false;
+let state = null, config = null, busy = false, drafts = {}, inviteLink = '', activeRead = null, activeUpload = null, mobileMenuOpen = false;
 const joinCode = () => location.hash.startsWith('#join=') ? location.hash.slice(6) : null;
 const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const url = (area, page='') => `${base}/${area}${page ? '#' + page : ''}`;
@@ -25,13 +25,13 @@ function notice(text) {
   clearTimeout(notice.timer);notice.timer=setTimeout(()=>{if(!box.contains(document.activeElement))dismissNotice();},10000);
 }
 function remember() {
-  app.querySelectorAll('[data-persist]').forEach(el=>drafts[el.dataset.persist]=el.type==='checkbox'?el.checked:el.value);
+  app.querySelectorAll('[data-persist]').forEach(el=>drafts[el.dataset.persist]=el.tagName==='DETAILS'?el.open:el.type==='checkbox'?el.checked:el.value);
   const questionFields=app.querySelectorAll('#ask-form textarea[name="question"]');
   if(questionFields.length)drafts.question_fields=[...questionFields].map(el=>el.value);
   if(state&&!personal())sessionStorage.setItem(storageKey(),JSON.stringify(drafts));
 }
 function restore() {
-  app.querySelectorAll('[data-persist]').forEach(el=>{if(Object.hasOwn(drafts,el.dataset.persist)){if(el.type==='checkbox')el.checked=drafts[el.dataset.persist];else el.value=drafts[el.dataset.persist];}});
+  app.querySelectorAll('[data-persist]').forEach(el=>{if(Object.hasOwn(drafts,el.dataset.persist)){if(el.tagName==='DETAILS')el.open=drafts[el.dataset.persist];else if(el.type==='checkbox')el.checked=drafts[el.dataset.persist];else el.value=drafts[el.dataset.persist];}});
   updateSelection();
 }
 function confirmAction(title,body,submit='Confirm') {
@@ -89,9 +89,7 @@ function actionItems() {
   const questions=staffQuestions().filter(waiting).map(q=>({href:'thread-'+q.id,title:q.text,
     reason:q.active_reminders.length?'Reminder received':state.replies.some(r=>!r.delivered&&r.covered.includes(q.id))?'Draft to review and send':q.messages.length>1?'Patient follow-up':'Needs a reply',
     action:'Open conversation'}));
-  const explanations=state.explanations.filter(e=>!e.approved&&!e.needs_clarification).map(e=>({href:'explain-'+e.document_id,title:e.source_quote,
-    reason:'Explanation awaiting review',action:'Open document'}));
-  return [...questions,...explanations];
+  return questions;
 }
 function updateNotifications() {
   const shortcut=document.querySelector('#activity-shortcut');
@@ -116,11 +114,11 @@ function shell(content) {
   return `${top}<div class="staff-shell"><aside class="queue"><div class="eyebrow">Current case</div><h2>${esc(state.person)}</h2><p class="mono">${esc(state.episode_id)}</p>
     <nav class="queue-filters" aria-label="Conversation lists"><a class="button wide" href="#requests" ${!showingResolved?'aria-current="page"':''}>Open questions (${staffQuestions().length})</a><a class="button wide" href="#resolved" ${showingResolved?'aria-current="page"':''}>Resolved questions (${staffQuestions(true).length})</a></nav>
     <nav aria-label="Conversations">${staffQuestions(showingResolved).map(q=>`<a class="card ${current==='thread-'+q.id?'selected':''}" href="#thread-${q.id}"><strong class="question-text">${esc(q.text)}</strong><br>${chip(q)}</a>`).join('')}</nav>
-    <a class="button wide" href="#ai">AI help</a><a class="button wide" href="#documents">Open documents</a></aside><main class="workspace" id="main">${content}</main></div>`;
+    <nav class="queue-tools" aria-label="Case tools"><a class="button wide" href="#ai">AI help</a><a class="button wide" href="#documents">Open documents</a></nav></aside><main class="workspace" id="main">${content}</main></div>`;
 }
 function aiTools() {
   if(!config.ai_enabled)return '';
-  return `<div class="ai-tools" aria-label="AI assistance"><a class="card request-link" href="#check"><strong>${role==='staff'?'Check before sharing':'Check for missing information'}</strong><p>Find missing details and conflicting instructions, with source passages.</p><span>Check documents &rarr;</span></a><a class="card request-link" href="#explain"><strong>Understand medical wording</strong><p>Choose a passage for a plain-language explanation reviewed by the ward.</p><span>Explain a passage &rarr;</span></a>${role==='patient'?'<a class="card request-link" href="#questions"><strong>Is the answer already here?</strong><p>Look in your documents before deciding to contact the ward.</p><span>Check a question &rarr;</span></a>':'<a class="card request-link" href="#requests"><strong>Help with a reply</strong><p>Open a conversation for an optional draft based on the case documents.</p><span>Open conversations &rarr;</span></a>'}</div>`;
+  return `<div class="ai-tools" aria-label="AI assistance"><a class="card request-link" href="#check"><strong>${role==='staff'?'Check before sharing':'Check for missing information'}</strong><p>Find missing details and conflicting instructions, with source passages.</p><span>Check documents &rarr;</span></a><a class="card request-link" href="#explain"><strong>Understand medical wording</strong><p>Read an AI explanation beside the original passage. Ask the ward if more information is needed.</p><span>Explain a passage &rarr;</span></a>${role==='patient'?'<a class="card request-link" href="#questions"><strong>Is the answer already here?</strong><p>Look in your documents before deciding to contact the ward.</p><span>Check a question &rarr;</span></a>':'<a class="card request-link" href="#requests"><strong>Help with a reply</strong><p>Open a conversation for an optional draft based on the case documents.</p><span>Open conversations &rarr;</span></a>'}</div>`;
 }
 function aiView() {
   const jobs=state.ai_jobs.filter(j=>['analyze','answer','explain'].includes(j.kind)).slice(-6).reverse();
@@ -134,7 +132,7 @@ function explainView(id) {
 function documentsView() {
   return `<h1>${role==='staff'?'Discharge documents':'Your documents'}</h1><p class="lede">${role==='staff'?'Review the case and choose what to share with the patient.':'Open a document or add a PDF. Find questions and replies under My questions.'}</p>
     ${aiTools()}<div class="actions"><a class="button" href="#add">Upload a PDF</a><a class="button" href="#requests">${role==='staff'?'Open questions':'Open questions and replies'}</a></div>
-    ${state.uploads.filter(u=>!u.confirmed).map(u=>`<a class="card request-link open" href="#upload-${u.id}"><strong>${esc(u.title)}</strong><span>Text extracted: review each page to finish adding this document</span></a>`).join('')}
+    ${state.uploads.filter(u=>!u.confirmed).map(u=>`<a class="card request-link open" href="#upload-${u.id}"><strong>${esc(u.title)}</strong><span>${activeUpload===u.id?'Reading your document...':config.ocr_provider==='amd_api'&&u.pages.some(p=>!p.gemma)?'Continue reading this PDF':'Review the pages to finish adding this document'}</span></a>`).join('')}
     <div class="stack">${state.documents.length?state.documents.map(d=>`<section class="card"><div class="row"><h2><a href="#reader-${d.identifier}">${esc(d.title)}</a></h2><span class="chip">${d.origin==='personal'?'Added by you':d.delivered?'Available to the patient':'In the ward case file'}</span></div><p>${d.demo_pdf||d.upload_id?'PDF document · original and transcription available':esc(d.text.slice(0,180))}</p><a class="button" href="#reader-${d.identifier}">Open document</a>
       ${role==='staff'&&d.approved?`<label class="check"><input type="checkbox" name="document" value="${d.identifier}" data-persist="doc-${d.identifier}">Include when sharing</label>`:''}</section>`).join(''):empty('No documents yet. Upload your first PDF.')}</div>
     ${role==='staff'?'<div class="batchbar"><p>Documents are shared separately from replies to questions.</p><button data-action="share-documents">Share selected documents</button></div>':''}`;
@@ -150,14 +148,25 @@ function readerView(id) {
 function executionDetails(result) {
   if(!result)return '';
   const calls=result.calls||[];
-  return `<details class="ai-provenance"><summary>How this result was produced</summary><p>Gemma-4-31B-IT on AMD API. ${calls.length} request${calls.length===1?'':'s'}; ${calls.reduce((n,c)=>n+c.elapsed_seconds,0).toFixed(1)} s of model requests.</p><ul>${calls.map(c=>`<li>${esc(c.stage)}: reasoning ${esc(c.reasoning_effort)}, ${c.usage?.total_tokens??'unreported'} tokens</li>`).join('')}</ul><p class="muted">${esc(result.prompt_version)}. Exact source checks verify provenance, not clinical correctness.</p></details>`;
+  return `<details class="ai-provenance"><summary>How this result was produced</summary><p>Gemma-4-31B-IT on AMD API. ${calls.length} request${calls.length===1?'':'s'}; ${calls.reduce((n,c)=>n+c.elapsed_seconds,0).toFixed(1)} s total AI call time, including quota checks and networking.</p><ul>${calls.map(c=>`<li>${esc(c.stage)}: reasoning ${esc(c.reasoning_effort)}, ${c.usage?.total_tokens??'unreported'} tokens</li>`).join('')}</ul><p class="muted">${esc(result.prompt_version)}. Exact source checks verify provenance, not clinical correctness.</p></details>`;
 }
 function jobStatus(job) {
   if(!job)return '';
-  if(['queued','running'].includes(job.status))return `<div class="ai-progress" role="status"><strong>${esc(job.stage)}</strong><p>You can leave this page and return. The check runs on the server and may take several minutes.</p></div>`;
+  if(['queued','running'].includes(job.status))return loading(job.status==='queued'?'getting your check ready':job.kind==='explain'?'explaining this passage':job.kind==='answer'?'looking for answers in your documents':job.kind==='draft'?'preparing a reply suggestion':'checking your documents');
   if(job.status==='failed')return `<p class="notice-inline" role="alert">${esc(job.message)} No successful result is being substituted.</p>`;
   if(job.stale)return '<p class="notice-inline">The documents or conversation changed. Run a new check before using this result.</p>';
   return '';
+}
+function loading(task) {
+  return `<div class="loading-state" role="status" aria-live="polite"><span class="spinner" aria-hidden="true"></span><span>AfterWard is ${esc(task)}...</span></div>`;
+}
+function glossaryView(doc) {
+  if(!state.glossary_enabled)return '';
+  const cached=state.glossaries?.[doc.identifier];
+  if(!cached||['queued','running','interrupted'].includes(cached.status))return loading('clarifying medical wording');
+  if(cached.status==='failed')return `<section class="card"><h2>Medical wording</h2><p>${esc(cached.message)}</p><button data-action="retry-glossary" data-document="${esc(doc.identifier)}">Try preparing explanations again</button></section>`;
+  const terms=cached.result.terms;
+  return `<section class="card glossary"><h2>Medical wording, explained</h2><p>${terms.length?'Choose a term to read its explanation.':'No unfamiliar clinical terms were identified. You can still select a passage below.'}</p><div class="glossary-list">${terms.map((item,index)=>`<details class="glossary-term"><summary>${esc(item.term)}</summary><div class="glossary-definition">${item.needs_clarification?'<p>This wording has more than one possible meaning here. The ward can clarify it.</p>':`<p class="plain-language">${esc(item.plain_language)}</p>`}<p class="caps">In your document</p><blockquote>${esc(item.source_quote)}</blockquote>${role!=='staff'?`<button data-action="ask-glossary" data-document="${esc(doc.identifier)}" data-index="${index}">${item.needs_clarification?'Prepare a question for the ward':'Still unclear? Ask the ward'}</button>`:''}</div></details>`).join('')}</div><p class="muted">AI explanations describe the wording and may contain errors. Keep the original instructions.</p>${executionDetails(cached.result)}</section>`;
 }
 function checkView() {
   const job=state.ai_jobs.filter(j=>j.kind==='analyze').at(-1);
@@ -173,11 +182,8 @@ function checkView() {
 function explanationView(doc) {
   const job=state.ai_jobs.filter(j=>j.kind==='explain'&&j.payload.documents.includes(doc.identifier)).at(-1);
   const explanations=state.explanations.filter(e=>e.document_id===doc.identifier);
-  const passages=doc.text.split(/\n+/).filter(p=>p.trim()&&p.length<=5000&&doc.text.split(p).length===2);
-  return `<section class="card"><h2>Understand this passage</h2>${config.ai_enabled?`<form class="explain-form" data-document="${esc(doc.identifier)}">${passages.length?`<label for="passage-${doc.identifier}">Choose a passage</label><select id="passage-${doc.identifier}" data-passage="${esc(doc.identifier)}"><option value="">Select from the document</option>${passages.map(p=>`<option value="${esc(p)}">${esc(p.slice(0,140))}${p.length>140?'...':''}</option>`).join('')}</select>`:''}<label for="quote-${doc.identifier}">Passage to explain (exact source text)</label><textarea id="quote-${doc.identifier}" name="quote" maxlength="5000" data-persist="explain-${doc.identifier}" required>${esc(doc.text.split('\n').find(p=>p.trim())||'')}</textarea><p class="muted">Gemma prepares a plain-language explanation. Ward staff review it before it is shown to the patient. If the passage needs new clinical information, ask the ward directly.</p><button ${state.ai_pending?'disabled':''}>Prepare explanation for review</button></form>`:'<p>AI explanations are disabled on this server.</p>'}
-    ${jobStatus(job)}${job?.status==='completed'&&!job.stale&&role!=='staff'&&!explanations.some(e=>e.id===job.result?.explanation_id)?'<p class="notice-inline">Explanation prepared and waiting for ward review. In this demo, switch to ward view and open this document to review it.</p>':''}
-    ${explanations.map(e=>`<article class="finding"><h3>${e.approved?'Explanation reviewed by the ward':'AI explanation awaiting review'}</h3><blockquote>${esc(e.source_quote)}</blockquote><p>${esc(e.plain_language)}</p>${e.needs_clarification?'<p class="notice-inline">This passage needs clarification from staff; this draft cannot be published as an explanation.</p>':role==='staff'&&!e.approved?`<button data-action="approve-explanation" data-id="${e.id}">I reviewed this explanation: make it available</button>`:''}</article>`).join('')}
-    ${role!=='staff'?'<a class="button" href="#questions">Ask the ward about this passage</a>':''}</section>`;
+  const results=explanations.slice().reverse().map(e=>`<article class="card explanation-result"><h2>${e.needs_clarification?'This passage needs clarification':e.approved?'Explanation reviewed by the ward':'AI explanation'}</h2><p class="caps">Original passage</p><blockquote class="quote">${esc(e.source_quote)}</blockquote>${e.needs_clarification?'<p>The document does not give enough context for a reliable explanation. You can prepare a question for the ward.</p>':`<p class="plain-language">${esc(e.plain_language)}</p><p class="muted">${e.approved?'The ward has reviewed this explanation.':'Generated by AI to explain the wording; it may contain errors. Keep the original instructions and ask the ward if anything remains unclear.'}</p>`}<div class="actions">${role!=='staff'?`<button data-action="ask-explanation" data-id="${e.id}">${e.needs_clarification?'Prepare a question for the ward':'Still unclear? Ask the ward'}</button>`:!e.approved&&!e.needs_clarification?`<button data-action="approve-explanation" data-id="${e.id}">Mark as reviewed (optional)</button>`:''}</div></article>`).join('');
+  return `${jobStatus(job)}${glossaryView(doc)}${results}${job?.status==='completed'&&!job.stale?executionDetails(job.result):''}<details class="card custom-explanation" ${state.glossary_enabled?'':'open'}><summary>Explain a different passage</summary>${config.ai_enabled?`<form class="explain-form" data-document="${esc(doc.identifier)}"><p>Copy the exact wording you want to understand from the <a href="#reader-${esc(doc.identifier)}">document</a>.</p><label for="quote-${doc.identifier}">Passage to explain</label><textarea id="quote-${doc.identifier}" name="quote" maxlength="5000" data-persist="explain-${doc.identifier}" required placeholder="Paste a passage from your document"></textarea><div class="actions"><button class="primary" ${state.ai_pending?'disabled':''}>Explain this passage</button></div></form>`:'<p>AI explanations are disabled on this server.</p>'}</details>`;
 }
 function aiReply(q) {
   const job=state.ai_jobs.filter(j=>j.kind==='draft'&&j.payload.question_id===q.id).at(-1);
@@ -188,7 +194,7 @@ function uploadForm() {
     <form id="upload-form" class="card"><label for="pdf-file">PDF to add (1 to 5 pages, maximum 12 MiB)</label><input id="pdf-file" name="pdf" type="file" accept="application/pdf,.pdf" required>
     <p>${config.ocr_provider==='amd_api'?'Gemma 4 31B reads each page through the AMD API. Use invented examples without personal or confidential data.':config.ocr_provider==='disabled'?'API OCR is disabled. Selectable PDF text is extracted; scans require manual transcription.':'The PDF is read on this computer. No page is sent to AMD.'}</p>
     ${config.packaged_uploads_only?`<p>This public demo accepts the <a href="${base}/judge-guide#ocr" target="_blank" rel="noopener">downloadable example PDFs</a> only. Other files are rejected before inference.</p>`:''}
-    <div class="actions"><button class="primary" type="submit">Read the PDF</button><a class="button" href="#documents">Back to documents</a></div><p id="upload-progress" role="status"></p></form>`;
+    <div class="actions"><button class="primary" type="submit">Read the PDF</button><a class="button" href="#documents">Back to documents</a></div><div id="upload-progress"></div></form>`;
 }
 function readingComparison(upload,p) {
   const g=p.gemma;
@@ -202,9 +208,11 @@ function readingComparison(upload,p) {
 }
 function reviewUpload(id) {
   const u=state.uploads.find(item=>item.id===id);if(!u)return breadcrumbs('Review PDF')+empty('Document unavailable.');if(u.confirmed)return readerView('pdf-'+id);
+  if(activeUpload===id||activeRead?.startsWith(id+'-'))return `${breadcrumbs('Reading PDF','documents','Documents')}<h1>${esc(u.title)}</h1>${loading('reading your document')}<a class="button" href="#documents">Back to documents</a>`;
+  if(config.ocr_provider==='amd_api'&&u.pages.some(p=>!p.gemma))return `${breadcrumbs('Finish reading PDF','documents','Documents')}<h1>${esc(u.title)}</h1><section class="card"><h2>Reading is not finished</h2><p>Your PDF is saved. Continue reading it to review the complete text.</p><div class="actions"><button class="primary" data-action="read-upload" data-upload="${id}">Continue reading</button><a class="button" href="#documents">Back to documents</a></div></section>`;
   return `${breadcrumbs('PDF review','documents','Documents')}<h1>Review the pages of ${esc(u.title)}</h1><p>Compare the extracted text with each original page. Open a page to enlarge it. Correct numbers, names and reading order; do not fill in missing instructions.</p>
-    <form id="confirm-upload" data-upload="${id}" class="stack">${u.pages.map(p=>`<section class="card"><h2>Page ${p.number} · ${p.method==='gemma_api'?'Gemma via AMD API':p.method==='gemma_pending'?'Gemma transcription pending':p.method==='ocr'?'OCR':'PDF text'}</h2>${p.warnings.map(w=>`<p class="notice-inline">${esc(w)}</p>`).join('')}
-      <div class="pdf-columns"><a href="${base}/api/${role}/uploads/${id}/${p.number}" target="_blank" rel="noopener"><img class="pdf-page" src="${base}/api/${role}/uploads/${id}/${p.number}" alt="Original page ${p.number}; open to enlarge"></a><div><label for="page-${p.number}">Text to review · page ${p.number}</label><textarea id="page-${p.number}" class="page-text" name="page" data-persist="upload-${id}-${p.number}" maxlength="24000" required>${esc(p.text)}</textarea></div></div>${readingComparison(u,p)}</section>`).join('')}
+    <form id="confirm-upload" data-upload="${id}" class="stack">${u.pages.map(p=>`<section class="card"><h2>Page ${p.number}</h2>${p.warnings.length?`<details><summary>Reading notes</summary>${p.warnings.map(w=>`<p>${esc(w)}</p>`).join('')}</details>`:''}
+      <div class="pdf-columns"><a href="${base}/api/${role}/uploads/${id}/${p.number}" target="_blank" rel="noopener"><img class="pdf-page" src="${base}/api/${role}/uploads/${id}/${p.number}" alt="Original page ${p.number}; open to enlarge"></a><div><label for="page-${p.number}">Text to review</label><textarea id="page-${p.number}" class="page-text" name="page" data-persist="upload-${id}-${p.number}" maxlength="24000" required>${esc(p.text)}</textarea></div></div><details><summary>Transcription details</summary>${readingComparison(u,p)}</details></section>`).join('')}
     <label class="check"><input type="checkbox" name="reviewed" required>I compared every page and checked that this document belongs to this case.</label><p class="muted">This confirms the transcription and selected case. It does not verify the author or clinical correctness.</p>
     <div class="actions"><button class="primary">Accept reviewed text</button><a class="button" href="#documents">Finish later</a></div></form>`;
 }
@@ -298,7 +306,9 @@ function render() {
   else if(current==='check')content=checkView();else if(current==='questions')content=askView();else if(current==='add')content=uploadForm();
   else if(current.startsWith('upload-'))content=reviewUpload(current.slice(7));else if(current.startsWith('reader-'))content=readerView(current.slice(7));
   else if(current==='share')content=shareView();else if(current==='settings')content=settingsView();else content=documentsView();
-  app.innerHTML=shell(content);restore();
+  app.innerHTML=shell(content);
+  app.querySelectorAll('.glossary-term,.custom-explanation').forEach(el=>{el.dataset.persist=`details-${current}-${el.querySelector('summary').textContent}`;});
+  restore();
 }
 const selected=name=>[...app.querySelectorAll(`input[name="${name}"]:checked:not(:disabled)`)].map(el=>el.value);
 function updateSelection() {
@@ -327,8 +337,13 @@ async function readPage(uploadId,number) {
     if(drafts[key]===previous)delete drafts[key];
   }finally{activeRead=null;render();}
 }
+async function readUpload(uploadId) {
+  activeUpload=uploadId;render();
+  try{
+    for(const p of state.uploads.find(u=>u.id===uploadId).pages){if(!p.gemma)await readPage(uploadId,p.number);}
+  }finally{activeUpload=null;render();}
+}
 app.addEventListener('input',remember);app.addEventListener('change',event=>{
-  if(event.target.dataset.passage&&event.target.value){const field=document.querySelector('#quote-'+event.target.dataset.passage);field.value=event.target.value;}
   remember();updateSelection();
 });
 app.addEventListener('click',async event=>{
@@ -358,7 +373,21 @@ app.addEventListener('click',async event=>{
       if(!personal())sessionStorage.setItem(storageKey(),JSON.stringify(drafts));location.hash='questions';
     }
     if(action==='ask-findings')await mutate('ask_findings',{job_id:el.dataset.job,keys:selected('finding')},'Selected questions are available to the ward.','requests');
-    if(action==='approve-explanation')await mutate('approve_explanation',{explanation_id:el.dataset.id},'Reviewed explanation is available with the source document.');
+    if(action==='retry-glossary')await mutate('retry_glossary',{document_id:el.dataset.document},'Preparing medical explanations.');
+    if(action==='read-upload'){
+      busy=true;
+      try{await readUpload(el.dataset.upload);}finally{busy=false;}
+    }
+    if(action==='ask-explanation'||action==='ask-glossary'){
+      const explanation=action==='ask-glossary'?state.glossaries?.[el.dataset.document]?.result?.terms[Number(el.dataset.index)]:state.explanations.find(e=>e.id===el.dataset.id);if(!explanation)return;
+      remember();const fields=(drafts.question_fields||[]).filter(text=>text.trim());
+      if(fields.length>=10)return notice('Send or remove a draft question before adding another.');
+      const quote=explanation.source_quote.slice(0,1800);
+      fields.push(`Could you explain what this passage means for me?\n\n${quote}${explanation.source_quote.length>1800?'...':''}`);
+      drafts.question_fields=fields;if(!personal())sessionStorage.setItem(storageKey(),JSON.stringify(drafts));
+      location.hash='questions';notice('Question prepared. Review it before sending; nothing has been sent yet.');return;
+    }
+    if(action==='approve-explanation')await mutate('approve_explanation',{explanation_id:el.dataset.id},'Explanation marked as reviewed by the ward.');
     if(action==='draft-ai')await mutate('start_ai',{kind:'draft',question_id:el.dataset.question,documents:state.documents.map(d=>d.identifier)},'Preparing an optional draft. You can keep writing your own reply.');
     if(action==='use-ai-draft'){
       const job=state.ai_jobs.find(j=>j.id===el.dataset.job);
@@ -394,7 +423,7 @@ app.addEventListener('submit',async event=>{
   event.preventDefault();if(busy)return;const form=event.target;
   try{
     if(form.id==='check-form')await mutate('start_ai',{kind:'analyze',documents:selected('check-document')},'Document check started. Progress appears here.');
-    else if(form.classList.contains('explain-form'))await mutate('start_ai',{kind:'explain',documents:[form.dataset.document],quote:form.elements.quote.value},'Explanation requested. Ward review is required before publication.');
+    else if(form.classList.contains('explain-form'))await mutate('start_ai',{kind:'explain',documents:[form.dataset.document],quote:form.elements.quote.value},'Explaining the passage. The result will appear here.');
     else if(form.id==='ask-form'){
       const questions=[...form.querySelectorAll('textarea[name="question"]')].map(el=>el.value.trim()).filter(Boolean);
       if(!questions.length||questions.length>10||questions.some(q=>q.length>2000))return notice('Enter 1 to 10 questions, up to 2,000 characters each.');
@@ -411,10 +440,9 @@ app.addEventListener('submit',async event=>{
     else if(form.classList.contains('follow-form'))await mutate('follow_up',{question_id:form.dataset.question,reply_id:form.dataset.reply,text:form.elements.text.value},'Follow-up added to the same conversation.',undefined,['follow-'+form.dataset.question]);
     else if(form.classList.contains('external-form'))await mutate('external_reply',{question_id:form.dataset.question,text:form.elements.text.value,source:form.elements.source.value},'Reply recorded with the source you provided.',undefined,['external-'+form.dataset.question]);
     else if(form.id==='upload-form'){
-      const file=form.elements.pdf.files[0];if(!file||file.size>config.pdf_max_bytes)return notice('Choose a PDF up to 12 MiB.');busy=true;form.querySelector('button').disabled=true;document.querySelector('#upload-progress').textContent='Uploading and preparing pages...';
-      const response=await fetch(`${base}/api/${role}/upload`,{method:'POST',headers:{'Content-Type':'application/pdf','X-AfterWard-Request':'1','X-AfterWard-CSRF':state.csrf,'X-AfterWard-Revision':String(state.revision),'X-AfterWard-Filename':encodeURIComponent(file.name)},body:file});const value=await response.json();if(!response.ok)throw new Error(errorMessage(value));state=value;const upload=state.uploads.at(-1);location.hash='upload-'+upload.id;render();
-      if(config.ocr_provider==='amd_api')for(const p of upload.pages){notice(`Gemma via AMD API: reading page ${p.number} of ${upload.pages.length}…`);await readPage(upload.id,p.number);}
-      notice('PDF read. Compare the text with every page.');
+      const file=form.elements.pdf.files[0];if(!file||file.size>config.pdf_max_bytes)return notice('Choose a PDF up to 12 MiB.');busy=true;form.querySelector('button').disabled=true;document.querySelector('#upload-progress').innerHTML=loading('opening your PDF');
+      const response=await fetch(`${base}/api/${role}/upload`,{method:'POST',headers:{'Content-Type':'application/pdf','X-AfterWard-Request':'1','X-AfterWard-CSRF':state.csrf,'X-AfterWard-Revision':String(state.revision),'X-AfterWard-Filename':encodeURIComponent(file.name)},body:file});const value=await response.json();if(!response.ok)throw new Error(errorMessage(value));state=value;const upload=state.uploads.at(-1);activeUpload=upload.id;location.hash='upload-'+upload.id;render();
+      if(config.ocr_provider==='amd_api')await readUpload(upload.id);else{activeUpload=null;render();}
     }else if(form.id==='confirm-upload')await mutate('confirm_upload',{upload_id:form.dataset.upload,pages:[...form.querySelectorAll('[name="page"]')].map(el=>el.value),reviewed:form.elements.reviewed.checked},'Document added with reviewed text.','reader-pdf-'+form.dataset.upload,state.uploads.find(u=>u.id===form.dataset.upload).pages.map(p=>`upload-${form.dataset.upload}-${p.number}`));
   }catch(error){notice(error.message);const button=form.querySelector('button');if(button)button.disabled=false;}finally{busy=false;}
 });
@@ -434,9 +462,9 @@ async function refreshWhenIdle(){
   if(!role||!state||busy||polling||document.hidden||document.querySelector('#confirm').open)return;
   if(['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName))return;
   polling=true;
-  try{const latest=await request(role);if(latest.csrf===state.csrf&&(latest.revision>state.revision||latest.ai_revision>state.ai_revision)&&!busy
+  try{const latest=await request(role);if(latest.csrf===state.csrf&&(latest.revision>state.revision||latest.ai_revision>state.ai_revision||latest.glossary_revision!==state.glossary_revision)&&!busy
       &&!document.querySelector('#confirm').open&&!['INPUT','TEXTAREA','SELECT'].includes(document.activeElement?.tagName)){
-      const aiChanged=latest.ai_revision>state.ai_revision;remember();state=latest;render();notice(aiChanged?'AI check updated.':'The conversation was updated.');}}
+      const conversationChanged=latest.revision>state.revision;remember();state=latest;render();if(conversationChanged)notice('The conversation was updated.');}}
   catch(error){const control=app.querySelector('[data-action="refresh"]');if(control)control.textContent='Check connection: refresh';}
   finally{polling=false;}
 }

@@ -5,6 +5,7 @@ accounts. Personal mode has only the local owner, no staff or delegate identitie
 Neither mode is a hospital SSO implementation; neither accepts client actors.
 """
 from contextlib import closing
+from collections import deque
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -16,6 +17,7 @@ import threading
 import uuid
 
 from .discharge_flow import Actor, Document, DischargeFlow, FlowError, bounded_text
+from .discharge_ai import GLOSSARY_VERSION, GLOSSARY_MODEL
 
 TITLES = {'letter': 'Discharge letter', 'rehab': 'Rehabilitation programme',
           'appointment': 'Follow-up appointment reminder', 'personal-sheet': 'Hand-delivered sheet'}
@@ -72,7 +74,7 @@ def decode(value):
 
 
 class WorkspaceStore:
-    def __init__(self, path, *, personal=False, page_transcriber=None, allowed_pdf_digests=None, local_ocr=True, ai=None):
+    def __init__(self, path, *, personal=False, page_transcriber=None, allowed_pdf_digests=None, local_ocr=True, ai=None, precompute_glossary=True):
         if personal and (page_transcriber or ai):
             raise ValueError('The shared AMD API cannot process personal documents.')
         self.path = Path(path)
@@ -84,12 +86,20 @@ class WorkspaceStore:
         self.ai_slot = threading.BoundedSemaphore(1)
         self.ai_admission = threading.Lock()
         self.ai_workers = set()
+        self.precompute_glossary = bool(precompute_glossary and ai and not personal)
+        self.glossary_lock = threading.Lock()
+        self.glossary_queue = deque()
+        self.glossary_running = False
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with closing(sqlite3.connect(self.path)) as db, db:
             db.execute('CREATE TABLE IF NOT EXISTS workspaces (token_hash TEXT PRIMARY KEY, csrf TEXT NOT NULL, expires TEXT NOT NULL, record TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS upload_assets (workspace TEXT NOT NULL, upload TEXT NOT NULL, page INTEGER NOT NULL, data BLOB NOT NULL, PRIMARY KEY(workspace,upload,page))')
             db.execute('CREATE TABLE IF NOT EXISTS workspace_sessions (token_hash TEXT PRIMARY KEY, workspace TEXT NOT NULL)')
             db.execute('CREATE TABLE IF NOT EXISTS workspace_invites (code_hash TEXT PRIMARY KEY, workspace TEXT NOT NULL, expires TEXT NOT NULL, role TEXT NOT NULL)')
+            db.execute('CREATE TABLE IF NOT EXISTS glossary_cache (cache_key TEXT PRIMARY KEY, status TEXT NOT NULL, updated_at_utc TEXT NOT NULL, record TEXT NOT NULL)')
+            db.execute("UPDATE glossary_cache SET status='interrupted' WHERE status IN ('queued','running')")
+            db.execute('DELETE FROM glossary_cache WHERE updated_at_utc<?',
+                ((datetime.now(timezone.utc)-timedelta(days=7)).isoformat(),))
             self._purge_expired(db)
             for key, raw in db.execute('SELECT token_hash,record FROM workspaces').fetchall():
                 record = json.loads(raw)
@@ -185,7 +195,7 @@ class WorkspaceStore:
             recipient='The ward you will contact' if self.personal else 'Continuity of care desk · Medicine', messages=record['messages'],
             acknowledgements=record['acknowledgements'], identity_mode='private_local' if self.personal else 'synthetic_demonstration',
             ai={'documentary': 'available' if self.ai else 'disabled',
-                'explanation': 'ward_review_required' if self.ai else 'disabled',
+                'explanation': 'patient_visible_ai' if self.ai else 'disabled',
                 'question_check': 'available' if self.ai else 'disabled',
                 'ward_assistance': 'available' if self.ai else 'disabled'})
         fingerprints = self._fingerprints(flow, role)
@@ -193,7 +203,7 @@ class WorkspaceStore:
         for job in record.get('ai_jobs', []):
             if job['role'] != role:
                 continue
-            item = {k: job[k] for k in ('id', 'kind', 'status', 'stage', 'created_at_utc', 'message', 'result', 'payload', 'asked_keys') if k in job}
+            item = {k: job[k] for k in ('id', 'kind', 'status', 'stage', 'created_at_utc', 'started_at_utc', 'finished_at_utc', 'message', 'result', 'payload', 'asked_keys') if k in job}
             item['stale'] = job['fingerprints'] != fingerprints
             if job['kind'] == 'draft':
                 q = flow.questions.get(job['payload']['question_id'])
@@ -204,6 +214,17 @@ class WorkspaceStore:
             value['ai_jobs'].append(item)
         value['ai_pending'] = any(j['status'] in ('queued', 'running') for j in record.get('ai_jobs', []))
         value['ai_revision'] = record.get('ai_revision', 0)
+        value['glossaries'] = {}
+        value['glossary_enabled'] = self.precompute_glossary
+        if self.precompute_glossary:
+            with closing(sqlite3.connect(self.path, timeout=10)) as cache_db:
+                for doc in value['documents']:
+                    cached = cache_db.execute('SELECT status,updated_at_utc,record FROM glossary_cache WHERE cache_key=?',
+                        (self._glossary_key(doc['text']),)).fetchone()
+                    if cached:
+                        value['glossaries'][doc['identifier']] = {'status': cached[0],
+                            'updated_at_utc': cached[1], **json.loads(cached[2])}
+        value['glossary_revision'] = hashlib.sha256(json.dumps(value['glossaries'], sort_keys=True).encode()).hexdigest()
         value['uploads'] = [{k: item[k] for k in ('id','title','pages','confirmed')}
             for item in record.get('uploads', []) if role == 'staff' or item['uploader_role'] != 'staff'
             or 'pdf-' + item['id'] in flow.delivered]
@@ -217,6 +238,83 @@ class WorkspaceStore:
         if role == 'staff':
             value.update(tasks=record['tasks'], intake=record['intake'], bundle_confirmation=record['bundle_confirmation'])
         return value
+
+    @staticmethod
+    def _glossary_key(text):
+        return hashlib.sha256(json.dumps([GLOSSARY_MODEL, 'medium', GLOSSARY_VERSION, text],
+            ensure_ascii=False).encode()).hexdigest()
+
+    def _glossary_inputs(self, record, role):
+        flow = decode(record['flow'])
+        candidates = {d['identifier']: d['text'] for d in flow.view(self._actor(flow, role))['documents']}
+        for upload in record.get('uploads', []):
+            if upload['confirmed'] or upload['uploader_role'] != role:
+                continue
+            if all(p['text'].strip() and (not self.page_transcriber or p.get('gemma')) for p in upload['pages']):
+                candidates['pdf-' + upload['id']] = '\n\n'.join(
+                    f"Page {p['number']}\n{p['text'].strip()}" for p in upload['pages'])
+        return candidates
+
+    def _schedule_glossaries(self, token, role):
+        if not self.precompute_glossary:
+            return
+        with self.glossary_lock:
+            with closing(sqlite3.connect(self.path, timeout=10)) as db, db:
+                db.execute('BEGIN IMMEDIATE')
+                _, record = self._load(db, token)
+                db.execute("DELETE FROM glossary_cache WHERE updated_at_utc<? AND status NOT IN ('queued','running')",
+                    ((datetime.now(timezone.utc)-timedelta(days=7)).isoformat(),))
+                for text in self._glossary_inputs(record, role).values():
+                    if not text.strip() or len(text) > 60000:
+                        continue
+                    key = self._glossary_key(text)
+                    row = db.execute('SELECT status FROM glossary_cache WHERE cache_key=?', (key,)).fetchone()
+                    if row and row[0] != 'interrupted':
+                        continue
+                    now = datetime.now(timezone.utc).isoformat()
+                    db.execute('INSERT OR REPLACE INTO glossary_cache VALUES (?,?,?,?)',
+                        (key, 'queued', now, json.dumps({'created_at_utc': now})))
+                    self.glossary_queue.append((key, text, now))
+            if self.glossary_queue and not self.glossary_running:
+                self.glossary_running = True
+                threading.Thread(target=self._run_glossaries, daemon=True).start()
+
+    def _run_glossaries(self):
+        while True:
+            with self.glossary_lock:
+                if not self.glossary_queue:
+                    self.glossary_running = False
+                    return
+                key, text, created = self.glossary_queue.popleft()
+            started = None
+            error_type = None
+            try:
+                with self.ai_slot:
+                    started = datetime.now(timezone.utc)
+                    with closing(sqlite3.connect(self.path, timeout=10)) as db, db:
+                        db.execute('UPDATE glossary_cache SET status=?,updated_at_utc=? WHERE cache_key=?',
+                            ('running', started.isoformat(), key))
+                    result = self.ai.glossary(text)
+                status, output = 'completed', {'result': result, 'created_at_utc': created}
+            except Exception as exc:
+                error_type = type(exc).__name__
+                status, output = 'failed', {'message': 'Medical wording could not be prepared. You can retry or ask the ward.',
+                                           'created_at_utc': created}
+            finished = datetime.now(timezone.utc)
+            output.update(started_at_utc=started.isoformat() if started else None, finished_at_utc=finished.isoformat())
+            try:
+                with closing(sqlite3.connect(self.path, timeout=10)) as db, db:
+                    db.execute('UPDATE glossary_cache SET status=?,updated_at_utc=?,record=? WHERE cache_key=?',
+                        (status, finished.isoformat(), json.dumps(output), key))
+                print(json.dumps({'event': 'ai_task', 'at_utc': finished.isoformat(), 'kind': 'clinical-glossary',
+                    'status': status, 'error_type': error_type,
+                    'queue_seconds': round((started-datetime.fromisoformat(created)).total_seconds(), 2) if started else None,
+                    'processing_seconds': round((finished-started).total_seconds(), 2) if started else None}), flush=True)
+            except sqlite3.Error:
+                # A closed or removed local workspace must not leave a spinning worker.
+                with self.glossary_lock:
+                    self.glossary_running = False
+                return
 
     @staticmethod
     def _fingerprints(flow, role):
@@ -307,6 +405,8 @@ class WorkspaceStore:
                 db.execute('BEGIN IMMEDIATE')
                 _, record = self._load(db, token)
                 job = next(j for j in record['ai_jobs'] if j['id'] == identifier)
+                if job['status'] in ('completed', 'failed'):
+                    return job
                 flow = decode(record['flow'])
                 actor = self._actor(flow, job['role'])
                 if job['fingerprints'] != self._fingerprints(flow, job['role']):
@@ -318,7 +418,7 @@ class WorkspaceStore:
                     if job['delivery'] != {k: d.fingerprint for k, d in flow.delivered.items()}:
                         error, result = 'Document delivery changed. Request a new draft with the current patient access.', None
                 if error:
-                    job.update(status='failed', message=error, stage='Check stopped')
+                    job.update(status='failed', message=error, stage='Check stopped', finished_at_utc=datetime.now(timezone.utc).isoformat())
                 elif result is not None:
                     if job['kind'] == 'explain':
                         output = result['explanation']
@@ -326,12 +426,20 @@ class WorkspaceStore:
                             {k: output[k] for k in ('document_fingerprint','source_quote','plain_language','needs_clarification')},
                             {'model': result['calls'][0]['model'], 'run_id': identifier, 'mode': 'live'}, flow.revision)
                         result['explanation_id'] = exp_id
-                    job.update(status='completed', result=result, stage='Ready to review')
+                    job.update(status='completed', result=result, stage='Result ready', finished_at_utc=datetime.now(timezone.utc).isoformat())
                 else:
+                    job.setdefault('started_at_utc', datetime.now(timezone.utc).isoformat())
                     job.update(status='running', stage=stage)
                 record['ai_revision'] = record.get('ai_revision', 0) + 1
                 record['flow'] = encode(flow)
                 db.execute('UPDATE workspaces SET record=? WHERE token_hash=?', (json.dumps(record), self._workspace(db, token)))
+            if result is not None or error:
+                created = datetime.fromisoformat(job['created_at_utc'])
+                started = datetime.fromisoformat(job.get('started_at_utc', job['finished_at_utc']))
+                finished = datetime.fromisoformat(job['finished_at_utc'])
+                print(json.dumps({'event': 'ai_task', 'at_utc': job['finished_at_utc'], 'task_id': identifier,
+                    'kind': job['kind'], 'status': job['status'], 'queue_seconds': round((started-created).total_seconds(), 2),
+                    'processing_seconds': round((finished-started).total_seconds(), 2)}), flush=True)
             if error:
                 raise FlowError(error)
             return job
@@ -359,6 +467,7 @@ class WorkspaceStore:
                 self.ai_workers.discard(identifier)
 
     def view(self, token, role):
+        self._schedule_glossaries(token, role)
         with closing(sqlite3.connect(self.path, timeout=10)) as db:
             csrf, record = self._load(db, token)
             value = self._view(record, role, csrf)
@@ -483,7 +592,8 @@ class WorkspaceStore:
             if not row:
                 raise FlowError('Page unavailable.')
             image, reference = bytes(row[0]), source['original_text']
-        result = self.page_transcriber(image, reference)
+        with self.ai_slot:
+            result = self.page_transcriber(image, reference)
         with closing(sqlite3.connect(self.path, timeout=10)) as db, db:
             db.execute('BEGIN IMMEDIATE')
             expected, record, flow, actor, source = checked(db)
@@ -493,7 +603,7 @@ class WorkspaceStore:
             flow.event(actor, 'page_transcribed_with_gemma_api', upload=upload_id, page=page)
             record['flow'] = encode(flow)
             db.execute('UPDATE workspaces SET record=? WHERE token_hash=?', (json.dumps(record, ensure_ascii=False), self._workspace(db, token)))
-            return self._view(record, role, expected)
+        return self.view(token, role)
 
     def delete(self, token, csrf):
         with closing(sqlite3.connect(self.path, timeout=10)) as db, db:
@@ -542,6 +652,15 @@ class WorkspaceStore:
                 job.setdefault('asked_keys', []).extend(keys)
             elif action == 'approve_explanation':
                 flow.approve_explanation(actor, payload.get('explanation_id'), revision)
+            elif action == 'retry_glossary':
+                if not self.precompute_glossary:
+                    raise FlowError('AI explanations are unavailable.')
+                documents = {d['identifier']: d for d in flow.view(actor)['documents']}
+                doc = documents.get(payload.get('document_id'))
+                if not doc:
+                    raise FlowError('Document unavailable for this access.')
+                db.execute("UPDATE glossary_cache SET status='interrupted' WHERE cache_key=? AND status='failed'",
+                    (self._glossary_key(doc['text']),))
             elif action == 'ask_checked':
                 if role != 'patient':
                     raise FlowError('Patient action required.')
@@ -680,4 +799,4 @@ class WorkspaceStore:
                 raise FlowError('This action is not available.')
             record['flow'] = encode(flow)
             db.execute('UPDATE workspaces SET record=? WHERE token_hash=?', (json.dumps(record, ensure_ascii=False), self._workspace(db, token)))
-            return self._view(record, role, expected_csrf)
+        return self.view(token, role)

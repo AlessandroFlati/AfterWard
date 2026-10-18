@@ -173,6 +173,18 @@ class QuotaTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
+    def test_request_timeout_is_diagnosable_without_logging_source_or_credentials(self):
+        with patch('carerelay.gemma_ocr.build_opener') as opener, patch('builtins.print') as emitted:
+            opener.return_value.open.side_effect=TimeoutError('sensitive upstream detail')
+            with self.assertRaisesRegex(DocumentError,'request timeout'):
+                self.client._request('/chat/completions',{'source':'private text'})
+        record=json.loads(emitted.call_args.args[0])
+        self.assertEqual(record['status'],'timeout')
+        self.assertEqual(record['operation'],'inference')
+        self.assertNotIn('private text',str(record))
+        self.assertNotIn('test-key',str(record))
+        self.assertNotIn('sensitive',str(record))
+
     def test_fixed_model_image_only_and_persistent_accounting(self):
         with patch.object(self.client, '_request', side_effect=[self.quota, self.response]) as call:
             result = self.client.transcribe_page(b'\x89PNGexample', 'Reference must not be sent')
