@@ -49,20 +49,35 @@ def bounded_text(value, limit):
     return value.strip()
 
 
-def validate_explanation(document, selected_quote, output):
+def validate_explanation(document, selected_quote, output, *, question=None):
     """Check provenance and lexical invariants, not clinical semantic equivalence."""
     required = {"document_fingerprint", "source_quote", "plain_language", "needs_clarification"}
+    if question is not None:
+        bounded_text(question, 2000)
+        required.add("in_scope")
     if type(output) is not dict or set(output) != required:
         raise FlowError("Unexpected explanation schema.")
     if output["document_fingerprint"] != document.fingerprint:
         raise FlowError("The explanation belongs to a different document revision.")
     quote = bounded_text(output["source_quote"], 5000)
-    plain = bounded_text(output["plain_language"], 5000)
     if quote != bounded_text(selected_quote, 5000) or document.text.count(quote) != 1:
         raise FlowError("The quoted passage is absent or ambiguous.")
     if type(output["needs_clarification"]) is not bool:
         raise FlowError("Clarification must be a boolean.")
     numbers = lambda text: re.findall(r"\d+(?:[.,:/-]\d+)*", text)
+    if question is not None:
+        if type(output["in_scope"]) is not bool or type(output["plain_language"]) is not str or len(output["plain_language"]) > 5000:
+            raise FlowError("Invalid document-question response.")
+        withheld = output["needs_clarification"] or not output["in_scope"]
+        plain = "" if withheld else bounded_text(output["plain_language"], 5000)
+        if set(numbers(plain)) - set(numbers(document.text)):
+            raise FlowError("The explanation introduced a number absent from the document.")
+        words = lambda text: re.findall(r"\w+", text.casefold())
+        if not withheld and words(plain) == words(quote):
+            raise FlowError("The explanation repeated the passage without answering. Try a more specific question.")
+        return {**deepcopy(output), "source_quote": quote, "plain_language": plain,
+                "needs_clarification": withheld, "semantic_validation": "not_clinically_validated"}
+    plain = bounded_text(output["plain_language"], 5000)
     if numbers(quote) != numbers(plain):
         raise FlowError("Quantities or dates were added, removed or reordered.")
     negation = lambda text: re.findall(r"\b(?:not|never|without|no|non|mai|senza)\b|n't\b", text.casefold())
@@ -312,7 +327,7 @@ class DischargeFlow:
             self.request_closed = all(q["status"] == "resolved" for q in self.questions.values())
             self.event(actor, "question_resolved_by_patient", question=question_id, reply=reply_id)
 
-    def submit_explanation(self, actor, document_id, selected_quote, output, provenance, revision):
+    def submit_explanation(self, actor, document_id, selected_quote, output, provenance, revision, *, question=None):
         with self.lock:
             self.check(actor, "explain" if actor.role == "staff" else "read", revision)
             visible = self.documents if actor.role == "staff" else {
@@ -320,7 +335,7 @@ class DischargeFlow:
             document = visible.get(document_id)
             if document is None:
                 raise FlowError("A source visible to this person is required.")
-            value = validate_explanation(document, selected_quote, output)
+            value = validate_explanation(document, selected_quote, output, question=question)
             if type(provenance) is not dict or set(provenance) != {"model", "run_id", "mode"} or provenance["mode"] not in {"recorded", "live", "offline_contract_test"}:
                 raise FlowError("Explicit execution provenance is required.")
             if not all(type(v) is str and 0 < len(v) <= 200 for v in provenance.values()):
@@ -328,6 +343,8 @@ class DischargeFlow:
             identifier = uuid.uuid4().hex
             self.explanations[identifier] = {**value, "id": identifier, "document_id": document_id,
                 "provenance": deepcopy(provenance), "approved": False, "reviewer": None, "requested_by": actor.subject}
+            if question is not None:
+                self.explanations[identifier]["question"] = bounded_text(question, 2000)
             self.event(actor, "explanation_drafted", explanation=identifier)
             return identifier
 

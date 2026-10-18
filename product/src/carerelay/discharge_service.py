@@ -392,6 +392,8 @@ class WorkspaceStore:
                     clean['quote'] = bounded_text(payload.get('quote'), 5000)
                     if source['text'].count(clean['quote']) != 1:
                         raise FlowError('Select one exact, unique passage from the document.')
+                    if 'question' in payload:
+                        clean['question'] = bounded_text(payload['question'], 2000)
                 job = {'id': identifier, 'kind': kind, 'role': role, 'status': 'queued', 'stage': 'Waiting for the AMD worker',
                     'created_at_utc': datetime.now(timezone.utc).isoformat(), 'payload': clean,
                     'fingerprints': self._fingerprints(flow, role), 'question_generation': question['generation'] if question else None,
@@ -429,9 +431,13 @@ class WorkspaceStore:
                 elif result is not None:
                     if job['kind'] == 'explain':
                         output = result['explanation']
+                        fields = ('document_fingerprint','source_quote','plain_language','needs_clarification')
+                        if 'question' in job['payload']:
+                            fields += ('in_scope',)
                         exp_id = flow.submit_explanation(actor, source['identifier'], job['payload']['quote'],
-                            {k: output[k] for k in ('document_fingerprint','source_quote','plain_language','needs_clarification')},
-                            {'model': result['calls'][0]['model'], 'run_id': identifier, 'mode': 'live'}, flow.revision)
+                            {k: output[k] for k in fields},
+                            {'model': result['calls'][0]['model'], 'run_id': identifier, 'mode': 'live'}, flow.revision,
+                            question=job['payload'].get('question'))
                         result['explanation_id'] = exp_id
                     job.update(status='completed', result=result, stage='Result ready', finished_at_utc=datetime.now(timezone.utc).isoformat())
                 else:
@@ -456,7 +462,8 @@ class WorkspaceStore:
                 if job['kind'] == 'analyze':
                     result = self.ai.analyze(documents, lambda text: save(stage=text))
                 elif job['kind'] == 'explain':
-                    result = self.ai.explain(source, job['payload']['quote'], lambda text: save(stage=text))
+                    result = self.ai.explain(source, job['payload']['quote'], lambda text: save(stage=text),
+                                             question=job['payload'].get('question'))
                 elif job['kind'] == 'answer':
                     result = self.ai.answer(documents, job['payload']['questions'], lambda text: save(stage=text))
                 else:
