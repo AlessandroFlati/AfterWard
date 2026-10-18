@@ -203,7 +203,7 @@ class WorkspaceStore:
         for job in record.get('ai_jobs', []):
             if job['role'] != role:
                 continue
-            item = {k: job[k] for k in ('id', 'kind', 'status', 'stage', 'created_at_utc', 'started_at_utc', 'finished_at_utc', 'message', 'result', 'payload', 'asked_keys') if k in job}
+            item = {k: job[k] for k in ('id', 'kind', 'status', 'stage', 'created_at_utc', 'started_at_utc', 'finished_at_utc', 'message', 'result', 'payload', 'asked_keys', 'retry_after_utc') if k in job}
             item['stale'] = job['fingerprints'] != fingerprints
             if job['kind'] == 'draft':
                 q = flow.questions.get(job['payload']['question_id'])
@@ -402,7 +402,7 @@ class WorkspaceStore:
         return self.view(token, role)
 
     def _run_ai(self, token, identifier, documents, source, question):
-        def save(stage=None, result=None, error=None):
+        def save(stage=None, result=None, error=None, retry_after_utc=None):
             with closing(sqlite3.connect(self.path, timeout=10)) as db, db:
                 db.execute('BEGIN IMMEDIATE')
                 _, record = self._load(db, token)
@@ -421,6 +421,8 @@ class WorkspaceStore:
                         error, result = 'Document delivery changed. Request a new draft with the current patient access.', None
                 if error:
                     job.update(status='failed', message=error, stage='Check stopped', finished_at_utc=datetime.now(timezone.utc).isoformat())
+                    if retry_after_utc:
+                        job['retry_after_utc'] = retry_after_utc
                 elif result is not None:
                     if job['kind'] == 'explain':
                         output = result['explanation']
@@ -461,7 +463,7 @@ class WorkspaceStore:
             from .documents import DocumentError
             message = str(exc) if isinstance(exc, (FlowError, DocumentError)) else 'This AI result could not be validated. No answer was published. Review the documents or retry.'
             try:
-                save(error=message)
+                save(error=message, retry_after_utc=getattr(exc, 'retry_after_utc', None))
             except (FlowError, StopIteration):
                 pass
         finally:

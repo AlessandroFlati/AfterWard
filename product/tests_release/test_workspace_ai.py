@@ -180,6 +180,17 @@ class WorkspaceAITests(unittest.TestCase):
         self.assertEqual(self.finish()['status'], 'completed')
         self.assertEqual(self.store.view(self.token, 'staff')['ai_jobs'], [])
 
+    def test_retry_time_survives_job_persistence_and_view_filtering(self):
+        from carerelay.gemma_ocr import BusyServiceError
+        error=BusyServiceError(time.time()+60)
+        with patch.object(self.ai,'analyze',side_effect=error):
+            self.start()
+            job=self.finish()
+        self.assertEqual(job['status'],'failed')
+        self.assertEqual(job['retry_after_utc'],error.retry_after_utc)
+        self.assertEqual(self.store.view(self.token,'patient')['ai_jobs'][-1]['retry_after_utc'],error.retry_after_utc)
+        self.assertEqual(self.store.view(self.token,'staff')['ai_jobs'],[])
+
     def test_changed_documents_invalidate_running_check(self):
         self.start()
         self.assertTrue(self.ai.started.wait(2))

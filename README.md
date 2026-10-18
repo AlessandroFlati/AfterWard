@@ -36,6 +36,8 @@ The `/presentation` page contains the product narrative and video walkthrough. T
 
 The interface never substitutes a recorded answer for a failed API call. Staff can write directly or review an AI suggestion; publication is always explicit. OCR transcription does not establish clinical correctness.
 
+Staff can upload and review a PDF from a reply editor, return to that conversation with their draft retained, and explicitly share selected documents. Reply suggestions use the documents selected in that editor. Model names, reasoning levels and request metrics are retained in server evidence rather than routine patient and ward screens.
+
 ## Run locally
 
 Python 3.11 or later is required. The container uses Python 3.13. No JavaScript build step or external font CDN is needed.
@@ -72,6 +74,8 @@ The fixed endpoint is `https://developer.amd.com.cn/radeon/api/v1`; model `Gemma
 Clinical wording is selected and explained with medium reasoning in the background after the last OCR page, before transcription confirmation. Existing documents are prepared when their case is opened. A shared SQLite cache on the persistent server volume keys results by exact document text, model, effort and prompt version. Identical documents across sessions reuse one pending or completed task; corrected text and prompt changes create a new key. Opening a prepared term makes no inference request. Cache reads follow document visibility: a patient cannot access an undelivered ward document's explanation. Failed tasks require an explicit retry; interrupted tasks resume on access. The non-sensitive demo glossary cache is retained for up to seven days and pruned at service startup; personal local mode never uses this cache or the AMD API. Definitions are source-bound AI output, not clinical validation. A separate custom-passage action uses none reasoning and remains available when the precomputed selection does not cover a concern.
 
 Each attempt, including background preparation and failed inference, counts. Requests are serialized and spaced. The client preserves the final $0.05-equivalent daily quota allocation reported by AMD; the API's quota units are not evidence of a paid retail price. Changing environment limits does not reset or silently expand a persisted ledger. A leftover lease after an interrupted process blocks further inference until an operator verifies that no request is active and clears only that lease.
+
+HTTP 429 responses retain a whitelisted limiter code and the provider's Retry-After delay in diagnostic logs, without response bodies. The running client blocks further attempts until that delay expires; this cooldown is in memory. Failed jobs retain their retry time so reply editors can show a countdown and an explicit retry button. No automatic inference retry is made.
 
 ## Architecture
 

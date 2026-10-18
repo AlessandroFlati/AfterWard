@@ -3,6 +3,7 @@ import base64
 from collections import Counter
 from contextlib import closing, contextmanager
 from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from http.client import HTTPException
 import json
 import math
@@ -29,6 +30,12 @@ Do not reconstruct text cut off at page edges. Return JSON with exactly one key,
 text, containing the faithful transcription with newlines. No commentary."""
 
 
+class BusyServiceError(DocumentError):
+    def __init__(self, retry_at):
+        super().__init__('The checking service is busy. Please wait before trying again. Your documents remain available.')
+        self.retry_after_utc = datetime.fromtimestamp(retry_at, timezone.utc).isoformat()
+
+
 class GemmaOCR:
     def __init__(self, key, budget_path, *, purpose='development', expires='2026-10-25'):
         if not key or any(c in key for c in '\r\n'):
@@ -39,10 +46,11 @@ class GemmaOCR:
             raise ValueError('Invalid API purpose.')
         self.purpose = purpose
         self.expires = datetime.strptime(expires, '%Y-%m-%d').date()
+        self.retry_at = 0
 
     def _request(self, path, payload=None, *, timeout=85):
         started = time.perf_counter()
-        outcome, status = 'failed', None
+        outcome, status, retry_after, limit_code = 'failed', None, None, None
         request = Request(BASE + path, data=json.dumps(payload).encode() if payload else None,
             headers={'Authorization': 'Bearer ' + self.key, 'Content-Type': 'application/json'})
         try:
@@ -56,6 +64,31 @@ class GemmaOCR:
         except HTTPError as exc:
             status = exc.code
             outcome = 'http_error'
+            if status == 429:
+                header = exc.headers.get('Retry-After', '') if exc.headers else ''
+                try:
+                    retry_after = float(header)
+                except ValueError:
+                    try:
+                        retry_after = parsedate_to_datetime(header).timestamp() - time.time()
+                    except (ValueError, TypeError, OverflowError):
+                        retry_after = 60
+                if not math.isfinite(retry_after) or retry_after < 0:
+                    retry_after = 60
+                try:
+                    body = strict_json(exc.read(8193))
+                    error = body.get('error') or (body.get('detail') or {}).get('error')
+                    code = error.get('code') if isinstance(error, dict) else None
+                    allowed = {'token_rate_limit_exceeded', 'ip_rate_limit_exceeded',
+                        'token_concurrency_rate_limit_exceeded', 'model_concurrency_rate_limit_exceeded',
+                        'process_concurrency_rate_limit_exceeded', 'global_concurrency_rate_limit_exceeded',
+                        'rate_limit_exceeded'}
+                    limit_code = code if code in allowed else 'unspecified'
+                except (ValueError, TypeError, AttributeError, OSError, InferenceError):
+                    limit_code = 'unspecified'
+                self.retry_at = max(self.retry_at, time.time() + retry_after)
+                exc.close()
+                raise BusyServiceError(self.retry_at) from None
             exc.close()
             raise DocumentError(f'AMD could not complete this request (HTTP {status}). Your documents remain available. You can retry.') from None
         except TimeoutError:
@@ -67,11 +100,14 @@ class GemmaOCR:
             print(json.dumps({'event': 'amd_request', 'at_utc': datetime.now(timezone.utc).isoformat(),
                 'operation': 'inference' if payload else 'quota', 'status': outcome,
                 'http_status': status, 'seconds': round(time.perf_counter()-started, 2),
-                'timeout_seconds': timeout if payload else 15}), flush=True)
+                'timeout_seconds': timeout if payload else 15,
+                'retry_after_seconds': retry_after, 'limit_code': limit_code}), flush=True)
 
     @contextmanager
     def _attempt(self, subject='workspace-gemma-ocr'):
         """Use the existing shared ledger; never extend or reset its allocation."""
+        if time.time() < self.retry_at:
+            raise BusyServiceError(self.retry_at)
         if not self.budget_path.is_file():
             raise DocumentError('AMD quota ledger unavailable.')
         now = datetime.now(timezone.utc)

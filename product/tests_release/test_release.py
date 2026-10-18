@@ -185,6 +185,29 @@ class QuotaTests(unittest.TestCase):
         self.assertNotIn('test-key',str(record))
         self.assertNotIn('sensitive',str(record))
 
+    def test_busy_response_keeps_retry_delay_and_blocks_early_retries(self):
+        from io import BytesIO
+        from urllib.error import HTTPError
+        from carerelay.gemma_ocr import BusyServiceError
+        body=b'{"detail":{"error":{"code":"model_concurrency_rate_limit_exceeded","message":"private upstream text"}}}'
+        response=HTTPError('https://example.invalid',429,'Limited',{'Retry-After':'60'},BytesIO(body))
+        with patch('carerelay.gemma_ocr.build_opener') as opener, patch('builtins.print') as emitted:
+            opener.return_value.open.side_effect=response
+            with self.assertRaises(BusyServiceError) as raised:
+                self.client._request('/chat/completions',{'source':'private document'})
+        self.assertGreater(datetime.fromisoformat(raised.exception.retry_after_utc),datetime.now(timezone.utc))
+        record=json.loads(emitted.call_args.args[0])
+        self.assertEqual(record['retry_after_seconds'],60)
+        self.assertEqual(record['limit_code'],'model_concurrency_rate_limit_exceeded')
+        self.assertNotIn('private',json.dumps(record))
+        with patch.object(self.client,'_request') as call:
+            with self.assertRaises(BusyServiceError):
+                self.client.chat('test',{},effort='medium',stage='ward-draft')
+            call.assert_not_called()
+        with closing(sqlite3.connect(self.path)) as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM inference_attempts').fetchone()[0],0)
+            self.assertIsNone(db.execute('SELECT active_id FROM inference_lease').fetchone()[0])
+
     def test_fixed_model_image_only_and_persistent_accounting(self):
         with patch.object(self.client, '_request', side_effect=[self.quota, self.response]) as call:
             result = self.client.transcribe_page(b'\x89PNGexample', 'Reference must not be sent')

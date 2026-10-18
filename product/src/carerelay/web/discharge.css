@@ -38,10 +38,14 @@ h1,h2,h3,.breadcrumbs,.check,.ai-progress,.ai-suggestion{overflow-wrap:anywhere}
 .queue-filters{display:grid;gap:8px}.queue-filters [aria-current=page]{border-color:var(--accent);background:var(--raised)}
 .queue-tools{display:grid;gap:12px;margin-top:24px}
 .workspace>.card+.card,.patient-shell>.card+.card{margin-top:24px}
-.workspace>:is(.card,.stack,.empty,.ai-provenance)+.button,.patient-shell>:is(.card,.stack,.empty,.ai-provenance)+.button{margin-top:20px}
-.workspace>.ai-provenance+.card,.patient-shell>.ai-provenance+.card{margin-top:24px}
+.workspace>:is(.card,.stack,.empty)+.button,.patient-shell>:is(.card,.stack,.empty)+.button{margin-top:20px}
+
 .card>.button+.check{margin-top:16px}
 .card>form+form{margin-top:24px}
+.reply-documents{margin:20px 0;padding:16px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.reply-documents .actions{margin-top:0}
+.reply-documents details{margin-top:12px}
+.reply-ai-sources{margin:16px 0}
 .external-form label+label{margin-top:16px}
 .explain-form textarea+p{margin-top:16px}
 .explanation-result .plain-language{font-size:1.12em;line-height:1.65;white-space:pre-wrap}
@@ -118,7 +122,7 @@ h1,h2,h3,.breadcrumbs,.check,.ai-progress,.ai-suggestion{overflow-wrap:anywhere}
 .ai-progress,.ai-suggestion{border:1px solid var(--accent,#7cc8bb);background:#112c30;border-radius:12px;padding:18px;margin:18px 0}
 .finding{border-top:1px solid #35434e;padding:20px 0}
 .finding blockquote,.ai-suggestion blockquote{white-space:pre-wrap;border-left:3px solid #82b9b2;padding:12px 16px;margin:12px 0;background:#14232d}
-.ai-provenance{margin-top:20px;color:#adbdc9}
+
 .explain-form textarea{min-height:100px;width:100%}
 .loading-state{display:flex;align-items:center;gap:16px;padding:28px;border:1px solid #3b5751;border-radius:12px;background:#142b2c;margin:24px 0;min-height:108px;font-size:18px}
 .spinner{width:24px;height:24px;flex:0 0 24px;border:3px solid #3b5751;border-top-color:#9ce1c8;border-radius:50%;animation:afterward-spin .9s linear infinite}
