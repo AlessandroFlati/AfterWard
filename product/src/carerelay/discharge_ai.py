@@ -74,6 +74,9 @@ when the supplied content already identifies it. Cite the actual document's cont
 The text field is patient-facing: describe the current facts without claiming that
 the proposed sharing has happened. Keep the operational recommendation out of that text;
 the interface shows staff a separate document-sharing action for review and confirmation.
+For a request to receive a file, keep the reply to one short sentence identifying that
+the requested document is in the ward record. Do not recite its medical instructions
+or answer questions the patient did not ask. The sharing action is the useful next step.
 If it is already patient_available, point the patient to it and leave share_documents [].
 If absent, acknowledge that staff must obtain or clarify it; a mention is not an attachment.
 Only recommend documents needed for this question. For conflicting content, ask staff
@@ -84,6 +87,12 @@ Return exactly {"text":"reply draft","needs_clarification":false,
 "citations":[{"source_id":"p1l1"}],"share_documents":["exact supplied document_id"]}.
 share_documents is [] when no sharing action is supported. A known document awaiting
 delivery alone does not require needs_clarification=true; missing or ambiguous content does.
+For EVERY document_id in share_documents, citations MUST include at least one source_id
+from that document's own pages, identified by original_document.document_id. Citing only
+the discharge letter that mentions the attachment is insufficient. You may cite both
+the reference and the attachment, but the attachment's own content is mandatory.
+Before returning, match each proposed document_id to a cited page's original_document;
+do not confuse a source_id (a line reference) with a document_id (a file identifier).
 Use 1-4 source references for an answer based on documents. A contiguous span uses
 source_start/source_end on the same page. Cite both conflicting instructions if relevant.
 For an acknowledgement with no factual answer, use citations [] and needs_clarification true.
@@ -285,7 +294,7 @@ class DischargeAI:
         if set(value['share_documents']) - (shareable & cited_documents):
             raise FlowError('A proposed document share was not supported by an available, unshared source.')
         return {**value, 'citations': [{**c, **locations[c['page']]} for c in citations],
-                'calls': [metadata], 'prompt_version': 'ward-draft-workspace-en-2'}
+                'calls': [metadata], 'prompt_version': 'ward-draft-workspace-en-3'}
 
     def answer(self, documents, questions, progress):
         packet, locations = packet_for(documents)
