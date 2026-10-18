@@ -136,3 +136,25 @@ h1,h2,h3,.breadcrumbs,.check,.ai-progress,.ai-suggestion{overflow-wrap:anywhere}
 .custom-explanation[open]>summary{margin-bottom:20px}
 @keyframes afterward-appear{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
 @media(prefers-reduced-motion:reduce){.spinner{animation-duration:2s}.glossary-definition{animation:none}}
+
+/* Actions, navigation and expandable controls retain a visible boundary at rest. */
+a:where([href]:not(.button):not(.card):not(.brand):not(.skip):not(:has(img))){display:inline-flex;align-items:center;gap:8px;min-height:44px;max-width:100%;padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel);text-decoration:none;overflow-wrap:anywhere}
+a:where([href]:not(.button):not(.card):not(.brand):not(.skip)):hover{border-color:var(--accent);background:var(--raised)}
+.appbar nav a{border:1px solid var(--line)}
+.brand{display:inline-flex;align-items:center;min-height:44px;padding:6px 10px;border:1px solid var(--line);border-radius:8px}.brand:hover{border-color:var(--accent);background:var(--raised)}
+a:has(>.pdf-page){display:block;border:2px solid var(--line);border-radius:8px;overflow:hidden;cursor:zoom-in}
+a:has(>.pdf-page):hover{border-color:var(--accent)}
+details>summary{display:flex;align-items:center;gap:16px;min-height:48px;padding:12px 16px;border:1px solid var(--line);border-radius:10px;background:var(--panel);font-weight:600;list-style:none}
+details>summary::-webkit-details-marker{display:none}
+details>summary::after{content:'+';margin-left:auto;flex:0 0 20px;text-align:center;font-size:22px;line-height:1}
+details[open]>summary::after{content:'-'}
+details>summary:hover,details[open]>summary{border-color:var(--accent);background:var(--raised)}
+details[open]>summary{margin-bottom:16px}
+.reply-documents>details>summary{min-height:50px;border-color:var(--accent);background:var(--raised);color:var(--text)}
+.reply-documents>details>summary:hover{background:var(--accent);color:#0f1a16}
+.glossary-term{padding:0;border:0}.glossary-term summary{padding:16px}
+.glossary-definition{padding:4px 18px 20px}
+.collaboration-bar{align-items:center}.collaboration-bar a{min-height:44px}
+.suggested-share{margin:20px 0;padding:18px;border:1px solid var(--accent);border-radius:10px;background:var(--deep)}
+.skip{border:1px solid var(--accent);border-radius:8px}
+@media(max-width:360px){.appbar nav a{font-size:11px;padding:6px 1px}}

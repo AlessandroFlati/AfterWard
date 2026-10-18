@@ -38,6 +38,8 @@ The interface never substitutes a recorded answer for a failed API call. Staff c
 
 Staff can upload and review a PDF from a reply editor, return to that conversation with their draft retained, and explicitly share selected documents. Reply suggestions use the documents selected in that editor. Model names, reasoning levels and request metrics are retained in server evidence rather than routine patient and ward screens.
 
+When a requested attachment is already in the ward case file, the reply model can recommend sharing that document. The server requires a citation to an available, undelivered document; staff review and confirm the recipient and selected files. A suggestion never publishes a document or claims delivery by itself.
+
 ## Run locally
 
 Python 3.11 or later is required. The container uses Python 3.13. No JavaScript build step or external font CDN is needed.

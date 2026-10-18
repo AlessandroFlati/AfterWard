@@ -66,9 +66,24 @@ latest patient follow-up in its thread. Use only the supplied documents; do not 
 treatment, dates, contacts, doses, diagnoses, appointments or claim that a document has
 been delivered unless patient_available is true. A document in the ward file is not
 necessarily available to the patient. Never claim an external message was sent.
+First distinguish a request for a document from a question about its contents.
+Search the supplied pages for the actual requested document, not just a reference to it.
+When that document exists in the ward file but patient_available is false, recommend
+sharing it in share_documents. Do not say staff must look for it or ask colleagues
+when the supplied content already identifies it. Cite the actual document's content.
+The text field is patient-facing: describe the current facts without claiming that
+the proposed sharing has happened. Keep the operational recommendation out of that text;
+the interface shows staff a separate document-sharing action for review and confirmation.
+If it is already patient_available, point the patient to it and leave share_documents [].
+If absent, acknowledge that staff must obtain or clarify it; a mention is not an attachment.
+Only recommend documents needed for this question. For conflicting content, ask staff
+to reconcile it rather than recommending indiscriminate sharing.
 If the question cannot be answered from these documents, give a short acknowledgement
 and explicitly say staff need to clarify it. Do not select between conflicting instructions.
-Return exactly {"text":"reply draft","needs_clarification":false,"citations":[{"source_id":"p1l1"}]}.
+Return exactly {"text":"reply draft","needs_clarification":false,
+"citations":[{"source_id":"p1l1"}],"share_documents":["exact supplied document_id"]}.
+share_documents is [] when no sharing action is supported. A known document awaiting
+delivery alone does not require needs_clarification=true; missing or ambiguous content does.
 Use 1-4 source references for an answer based on documents. A contiguous span uses
 source_start/source_end on the same page. Cite both conflicting instructions if relevant.
 For an acknowledgement with no factual answer, use citations [] and needs_clarification true.
@@ -252,18 +267,25 @@ class DischargeAI:
         progress('Preparing an optional reply for staff review')
         context = source_context(packet, locations)
         context.update(conversation=question, delivery=[{'document_id': d['identifier'],
-                       'patient_available': d['delivered']} for d in documents])
+                       'title': d['title'], 'patient_available': d['delivered']} for d in documents])
         value, metadata = self.client.chat(WARD, context, effort='medium', stage='ward-draft')
-        if (type(value) is not dict or set(value) != {'text', 'needs_clarification', 'citations'}
+        if (type(value) is not dict or set(value) != {'text', 'needs_clarification', 'citations', 'share_documents'}
                 or type(value['text']) is not str or not 1 <= len(value['text'].strip()) <= 10000
                 or type(value['needs_clarification']) is not bool or type(value['citations']) is not list
-                or len(value['citations']) > 4):
+                or len(value['citations']) > 4 or type(value['share_documents']) is not list
+                or len(value['share_documents']) > 4
+                or any(type(identifier) is not str for identifier in value['share_documents'])
+                or len(set(value['share_documents'])) != len(value['share_documents'])):
             raise FlowError('The model did not return a valid reply draft.')
         citations = resolve_references(value['citations'], packet) if value['citations'] else []
         if not citations and not value['needs_clarification']:
             raise FlowError('An unsupported factual reply was rejected.')
+        cited_documents = {locations[c['page']]['document_id'] for c in citations}
+        shareable = {d['identifier'] for d in documents if not d['delivered']}
+        if set(value['share_documents']) - (shareable & cited_documents):
+            raise FlowError('A proposed document share was not supported by an available, unshared source.')
         return {**value, 'citations': [{**c, **locations[c['page']]} for c in citations],
-                'calls': [metadata], 'prompt_version': 'ward-draft-workspace-en-1'}
+                'calls': [metadata], 'prompt_version': 'ward-draft-workspace-en-2'}
 
     def answer(self, documents, questions, progress):
         packet, locations = packet_for(documents)

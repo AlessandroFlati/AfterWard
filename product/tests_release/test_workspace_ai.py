@@ -129,6 +129,40 @@ class PipelineTests(unittest.TestCase):
         with self.assertRaises((FlowError, ValueError)):
             DischargeAI(client).answer(self.docs, [{'id': 'q1', 'text': 'Question'}], lambda _: None)
 
+    def test_ward_draft_recommends_cited_undelivered_document(self):
+        docs = self.docs + [{'identifier': 'rehab', 'title': 'Rehabilitation programme',
+                            'fingerprint': 'r1', 'delivered': False, 'pages': ['Rehabilitation programme: supplied exercises.']}]
+        value = {'text': 'The rehabilitation programme is in the ward case file.',
+                 'needs_clarification': False, 'citations': [{'source_id': 'p2l1'}],
+                 'share_documents': ['rehab']}
+        client = ScriptedClient([value])
+        result = DischargeAI(client).draft(docs, {'text': 'Please send the sheet.'}, lambda _: None)
+        self.assertEqual(result['share_documents'], ['rehab'])
+        self.assertEqual(result['citations'][0]['document_id'], 'rehab')
+        self.assertEqual(client.calls[0][:2], ('ward-draft', 'medium'))
+        self.assertEqual(client.calls[0][2]['delivery'][1],
+                         {'document_id': 'rehab', 'title': 'Rehabilitation programme', 'patient_available': False})
+
+    def test_ward_draft_rejects_unknown_delivered_uncited_or_duplicate_shares(self):
+        for ids, citations in [(['other'], [{'source_id': 'p1l1'}]),
+                              (['letter'], [{'source_id': 'p1l1'}]),
+                              (['rehab'], [{'source_id': 'p1l1'}]),
+                              (['rehab', 'rehab'], [{'source_id': 'p2l1'}])]:
+            docs = self.docs + [{'identifier': 'rehab', 'title': 'Exercises', 'fingerprint': 'r1',
+                                'delivered': False, 'pages': ['Exercise sheet.']}]
+            value = {'text': 'A proposed reply.', 'needs_clarification': False,
+                     'citations': citations, 'share_documents': ids}
+            with self.subTest(ids=ids, citations=citations), self.assertRaises(FlowError):
+                DischargeAI(ScriptedClient([value])).draft(docs, {'text': 'Please send the sheet.'}, lambda _: None)
+
+    def test_ward_draft_can_acknowledge_absent_sheet_without_proposing_share(self):
+        value = {'text': 'The sheet is not in this packet; staff need to obtain it.',
+                 'needs_clarification': True, 'citations': [], 'share_documents': []}
+        result = DischargeAI(ScriptedClient([value])).draft(self.docs,
+                     {'text': 'Please send the exercises.'}, lambda _: None)
+        self.assertEqual(result['share_documents'], [])
+        self.assertTrue(result['needs_clarification'])
+
 
 class BlockingAI:
     def __init__(self):
